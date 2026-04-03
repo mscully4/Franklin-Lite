@@ -12,7 +12,7 @@ See `README.md` for setup, directory structure, and settings reference.
 
 ### Run Mode
 
-When the user says **"Run"**, read `modes/RUN.md` and follow it. Start the loop at a **2-minute interval**.
+When the user says **"Run"**, read `modes/RUN.md` and follow it. Start the loop at a **1-minute interval**.
 
 ### Dev Mode
 
