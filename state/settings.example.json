@@ -1,0 +1,12 @@
+{
+  "mode": "drafts_only",
+  "user_profile": {
+    "name": "Your Name",
+    "slack_user_id": "UXXXXXXXXXX",
+    "tone": "professional but not stiff, direct, friendly"
+  },
+  "authorized_users": [
+    { "name": "your-name", "slack_user_id": "UXXXXXXXXXX" }
+  ],
+  "integrations": ["slack", "jira", "github", "gws"]
+}

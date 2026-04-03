@@ -1,0 +1,27 @@
+# Personal config (copy from settings.example.json)
+state/settings.json
+
+# Runtime state
+state/last_run.json
+state/feedback.md
+state/scheduled_quests.json
+state/calendar.json
+state/self_improvement_log.json
+state/franklin.lock
+state/quests/active/*.json
+state/quests/completed/*.json
+state/quests/archived/*.json
+state/dev/proposals/*.json
+
+# Local Claude Code config
+.claude/
+
+# Local symlinks (users provide their own knowledge/references dirs)
+knowledge
+references
+
+# Runtime tool data
+.analyze-pr/
+
+# OS
+.DS_Store
