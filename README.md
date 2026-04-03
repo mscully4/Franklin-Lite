@@ -134,6 +134,30 @@ For code changes, Franklin clones your fork into a sandbox, makes changes, opens
 
 ---
 
+## Dev Workflow
+
+When a quest involves code changes, Franklin follows a structured end-to-end flow. The full spec is in `playbooks/DevWorkflow.md`.
+
+### Phases
+
+**1. Ticket** — Create or transition the Jira ticket to `In Progress`.
+
+**2. Plan** — A subagent explores the codebase and returns a plan plus any open questions. Franklin DMs you the questions, waits for answers, then finalizes the plan. In `drafts_only` mode, you approve the plan before implementation starts.
+
+**3. Implement** — A subagent works in an isolated sandbox (`~/franklin-sandbox/<quest-id>/`), follows the plan, and makes changes. Never touches your working directories.
+
+**4. PR** — Franklin opens a PR against upstream, self-reviews it with `analyze-pr`, posts a comment on the Jira ticket, transitions it to `In Review`, and DMs you the link.
+
+**5. Babysit** — `babysit-pr` runs autonomously: fixes CI failures, addresses review comments, resolves SonarQube issues, and notifies reviewers when ready. Franklin DMs you when the PR is mergeable.
+
+**6. Cleanup** — Sandbox directory is deleted. Quest moves to `completed/`.
+
+### Clarification Rule
+
+At any phase, if a decision is ambiguous enough to meaningfully change the approach, Franklin pauses and DMs you rather than guessing. Questions during planning are preferred — mid-implementation interruptions are more disruptive, but always better than a wrong assumption.
+
+---
+
 ## Self-Improvement
 
 When Franklin spots a gap in its own instructions, it drafts a proposed change to `CLAUDE.md` and DMs you. You approve or reject. Changes are logged in `state/self_improvement_log.json`.
