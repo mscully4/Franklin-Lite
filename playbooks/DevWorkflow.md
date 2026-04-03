@@ -4,6 +4,22 @@ This document describes how Franklin handles end-to-end development tasks: from 
 
 ---
 
+## Existing PR
+
+When a quest references an existing PR (e.g. fix CI, address review feedback, continue someone else's work):
+
+1. Resolve the repo name and PR number from the quest or Slack context
+2. Clone the fork into the sandbox as normal: `git clone git@github.com-emu:michael-scully_crcl/<repo>.git ~/franklin-sandbox/<quest-id>/<repo>`
+3. Add upstream: `git remote add upstream git@github.com-emu:crcl-main/<repo>.git`
+4. Check out the PR branch: `gh pr checkout <number>` — this fetches the branch and sets up tracking automatically
+5. Set `sandbox_path` on the quest, store `pr_url`
+6. Proceed from **Phase 3 (Implement)** — skip ticket creation and planning unless the task warrants it
+7. Push fixes to the existing branch; `babysit-pr` picks up from there
+
+If the PR is from a fork you don't own, use `gh pr checkout <number>` — it handles the remote fetch automatically.
+
+---
+
 ## Phases
 
 ### 1. Ticket
