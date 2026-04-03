@@ -73,6 +73,10 @@ Log the full agent response to the quest log.
 
 ### 4. PR Creation
 
+Before creating the PR, run a local SonarQube scan using the `sonar-scan` skill:
+- If issues are found at BLOCKER or HIGH severity, fix them (use `--fix` flag) and re-scan before proceeding.
+- MEDIUM and below: fix if straightforward, otherwise proceed and let `babysit-pr` handle them via CI.
+
 Invoke the `create-pr` skill to push the branch and open a PR against `crcl-main/<repo-name>`.
 
 Optionally run `analyze-pr` first to self-review before the PR goes up — catches obvious issues before CI runs.
@@ -112,6 +116,7 @@ On quest completion:
 | Phase | Skill |
 |---|---|
 | Ticket | `jira-ticket` |
+| Pre-PR Sonar scan | `sonar-scan` |
 | PR creation | `create-pr` |
 | Pre-PR review | `analyze-pr` |
 | Post-PR Jira update | `update-ticket-after-pr` |

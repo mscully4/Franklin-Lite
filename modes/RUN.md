@@ -8,9 +8,21 @@ Read this file when operating in **Run mode**. Do not read it during Dev mode.
 
 1. Check `state/franklin.lock` — abort if heartbeat is <4 minutes old (another instance running).
 2. Write a fresh lockfile with `started_at` and `last_heartbeat`.
-3. Reconcile `state/scheduled_quests.json` with `CronList` — add missing jobs, remove duplicates.
-4. Scan `~/franklin-sandbox/` for directories whose quest-id has no corresponding active quest file — delete them.
-5. Confirm start to the user, then begin the loop.
+3. **Verify required integrations** — run all three checks in parallel:
+   - **Slack**: `mcp__slack__slack_read_user_profile` (current user)
+   - **Atlassian**: `mcp__mcp-atlassian__atlassianUserInfo`
+   - **Datadog**: `mcp__datadog__search_datadog_monitors` with `query: "env:prod"` (lightweight probe)
+
+   If any check fails or returns an error, **stop immediately** — do not write the lockfile, do not begin the loop. Fire a macOS notification and DM the user (via whichever integrations are still working) with which integration failed, then exit:
+   ```bash
+   osascript -e 'display notification "<integration> is unreachable — Franklin did not start" with title "Franklin ☕" subtitle "Startup aborted" sound name "Blow"'
+   ```
+   ```
+   ❌ Franklin startup failed — <integration> is unreachable. Fix the integration and restart.
+   ```
+4. Reconcile `state/scheduled_quests.json` with `CronList` — add missing jobs, remove duplicates.
+5. Scan `~/franklin-sandbox/` for directories whose quest-id has no corresponding active quest file — delete them.
+6. Confirm start to the user, then begin the loop.
 
 ---
 
@@ -68,7 +80,9 @@ Fetch ALL of the following in parallel:
 1. Direct mentions: search '<@{slack_user_id}> after:{yesterday_date}', filter ts > last_slack_query_ts
 2. Usergroup mentions: search '@stablecoin-solutions-org after:{yesterday_date}' and '@stablecoin-console-dev-only after:{yesterday_date}', skip messages from the user themselves, filter ts > last_slack_query_ts
 3. Self-tags: search 'from:<@{slack_user_id}> <@{slack_user_id}>'
-4. Self-DM channel (D09TPK162SD): call slack_read_channel(D09TPK162SD, limit=100, oldest=dm_self_oldest). For each top-level message where latest_reply_ts > last_slack_query_ts, call slack_read_thread(D09TPK162SD, thread_ts) to get new replies.
+4. Self-DM channel (D09TPK162SD): call slack_read_channel(D09TPK162SD, limit=100, oldest=dm_self_oldest). Process two cases:
+   - New top-level messages: ts > last_slack_query_ts (include directly, no thread fetch needed unless reply_count > 0)
+   - Existing threads with new replies: latest_reply_ts > last_slack_query_ts AND ts <= last_slack_query_ts → call slack_read_thread(D09TPK162SD, thread_ts, oldest=last_slack_query_ts)
 5. Quest threads: for each active quest with a source.thread_ts, read that thread since last_slack_query_ts using slack_read_thread
 6. @franklin name mentions: search '@franklin after:{two_days_ago}', filter ts > last_slack_query_ts. Use two_days_ago (not yesterday_date) to guard against Slack search indexing lag.
 
@@ -146,7 +160,7 @@ Inputs:
 - active_jira_quests: {list of quest IDs with their source.ticket_key and last known status}
 
 Do ALL of the following:
-1. Query assigned open tickets: 'assignee = currentUser() AND status not in (Done, Closed) ORDER BY updated DESC'
+1. Query assigned in-progress tickets: 'assignee = currentUser() AND statusCategory = "In Progress" ORDER BY updated DESC'
 2. For each ticket already in active_jira_quests, check for new comments or status changes since last_run_completed
 3. For each active Jira quest, check for linked PRs (GitHub URLs in comments, description, or remote links via getJiraIssueRemoteIssueLinks). For any PR found, run: gh pr view <url> --json state,reviews,statusCheckRollup,mergedAt
 4. Check: ticket in progress 7+ days with no update, sprint deadline within 2 days
@@ -238,7 +252,7 @@ See `integrations/GWS.md` for the full GWS Monitor spec (Gmail triage, calendar,
 
 After all integration digests are processed:
 
-- **Upsert** new learnings into the vector store: new `info_received`/`learnings` log entries, new `state/feedback.md` entries, Slack thread summaries (collection: `franklin`)
+- **Upsert** new learnings into the vector store: new `info_received`/`learnings` entries from quest sidecar logs (`quest-{id}.log.json`), new `state/feedback.md` entries, Slack thread summaries (collection: `franklin`)
 - **Query** before executing each active quest: search `collection: "*"` with the quest objective, `k=5`. Inject results as context.
 
 Skill: `python3 ~/DevEnv/skills/vector-memory/memory.py`
@@ -276,7 +290,7 @@ For each message in the Slack digest:
 - Cancel → set status to `cancelled`.
 
 **d. Reply to tracked thread:**
-- Log the reply on the quest's `log` array.
+- Append the reply to the quest's sidecar log file (`state/quests/active/quest-{id}.log.json`).
 - If objective is met → set status to `completed`.
 
 **e. #warn-developer-services:**
@@ -304,6 +318,21 @@ If Datadog has no staging data, note it and leave recommendation neutral.
 
 After every Slack DM to user: fire `osascript -e 'display notification "..." with title "Franklin ☕" subtitle "New message" sound name "Blow"'`
 
+#### PR Review Quests
+
+When the quest is to review a PR (e.g. "review PR #123 in wallets-api"):
+
+1. `mkdir -p ~/franklin-sandbox/<quest-id>`
+2. Clone the fork: `git clone git@github.com-emu:michael-scully_crcl/<repo-name>.git ~/franklin-sandbox/<quest-id>/<repo-name>`
+3. Add upstream: `git remote add upstream git@github.com-emu:crcl-main/<repo-name>.git`
+4. Check out the PR branch: `gh pr checkout <number> --repo crcl-main/<repo-name>` — fetches the branch and sets up tracking
+5. Set `sandbox_path` on the quest to `~/franklin-sandbox/<quest-id>`
+6. Invoke the `analyze-pr` skill from within `~/franklin-sandbox/<quest-id>/<repo-name>` — subagents need the local checkout to use `Read`/`Grep`/`Glob` on the actual files
+7. Post findings per `analyze-pr` output. Log result to quest sidecar. DM user with summary.
+8. On quest completion: `rm -rf ~/franklin-sandbox/<quest-id>`, set `sandbox_path` to null.
+
+---
+
 #### Code-Change Quests
 
 See `playbooks/DevWorkflow.md` for the full dev workflow (ticket → plan → implementation → PR → babysit). Summary below.
@@ -316,13 +345,28 @@ Franklin works exclusively in `~/franklin-sandbox/`. Never touch `~/Workplace/em
 4. `git checkout -b <ticket-key>`
 5. Set `sandbox_path` on the quest to `~/franklin-sandbox/<quest-id>`. If the quest is resuming and `sandbox_path` is already set and the directory exists, skip steps 1–4.
 6. Spawn a general-purpose Agent with the task description and the sandbox path. The agent makes changes, pushes the branch, and returns a result.
-7. Log the full agent response to the quest `log` array (action: `note`). Extract PR URL if present and store it as `pr_url` on the quest. DM user with a summary.
+7. Append the full agent response to the quest's sidecar log file (`state/quests/active/quest-{id}.log.json`, action: `note`). Extract PR URL if present and store it as `pr_url` on the quest. DM user with a summary.
 8. On quest completion or cancellation: `rm -rf ~/franklin-sandbox/<quest-id>`, set `sandbox_path` to null.
 8. Multiple repos → spawn agents in parallel (if independent) or sequentially (if dependent).
 
 ### Quest File Schema
 
 Files in `state/quests/{active|completed|archived}/quest-{id}.json`. IDs are sequential — scan all three dirs for highest existing ID and increment.
+
+Quest logs are stored in a sidecar file: `quest-{id}.log.json` (same directory as the quest file). The sidecar is a JSON array of log entries. Load it only when actively working a quest — do not include it in subagent state injections. Log entry schema:
+```json
+{
+  "timestamp": "ISO 8601",
+  "action": "message_sent | info_received | status_change | note",
+  "platform": "slack",
+  "target": "who (for message_sent)",
+  "source": "who (for info_received)",
+  "channel": "channel ID",
+  "message_url": "permalink",
+  "summary": "what happened",
+  "learnings": "what was learned (optional)"
+}
+```
 
 ```json
 {
@@ -345,19 +389,6 @@ Files in `state/quests/{active|completed|archived}/quest-{id}.json`. IDs are seq
     "approved_at": null,
     "user_notes": ""
   },
-  "log": [
-    {
-      "timestamp": "ISO 8601",
-      "action": "message_sent | info_received | status_change | note",
-      "platform": "slack",
-      "target": "who (for message_sent)",
-      "source": "who (for info_received)",
-      "channel": "channel ID",
-      "message_url": "permalink",
-      "summary": "what happened",
-      "learnings": "what was learned (optional)"
-    }
-  ],
   "sandbox_path": "~/franklin-sandbox/<quest-id> or null if not a code-change quest or already cleaned up",
   "pr_url": "PR URL if applicable, null otherwise",
   "outcome": "final summary when completed, null otherwise",
@@ -383,6 +414,19 @@ Write `last_run.json` **last**, after all quest files and messages are saved:
 - `last_slack_query_ts` → `new_slack_query_ts` from Step 2
 - `last_run_completed` → ISO 8601 timestamp from Step 2
 - `scout_last_run[scout]` → update timestamp for each scout that ran this cycle
+- `notified_meetings` → prune entries older than 24 hours before writing:
+  ```bash
+  cutoff=$(date -v-1d +%s)
+  jq --argjson cutoff "$cutoff" '
+    .notified_meetings |= map(
+      select(
+        (gsub(".*(?P<d>[0-9]{8})$"; "\(.d)") | strptime("%Y%m%d") | mktime) > $cutoff
+        or (gsub(".*(?P<d>[0-9]{4}-[0-9]{2}-[0-9]{2})$"; "\(.d)") | strptime("%Y-%m-%d") | mktime) > $cutoff
+      )
+    )
+  ' state/last_run.json
+  ```
+  If a meeting ID doesn't contain a parseable date, keep it (fail safe).
 
 ---
 
@@ -391,7 +435,7 @@ Write `last_run.json` **last**, after all quest files and messages are saved:
 1. **Follow instructions.** Run mode is execution, not discussion.
 2. **Never create quests for yourself.** Only authorized users trigger quests via self-tags.
 3. **Never send to third parties without authorization.** Draft first in `drafts_only` mode.
-4. **Always log.** Every message sent and info received gets a log entry with a permalink.
+4. **Always log.** Every message sent and info received gets a log entry appended to the quest's sidecar log file (`quest-{id}.log.json`), with a permalink.
 5. **Fail gracefully.** If blocked, log it and DM the user. Don't retry blindly.
 6. **Respect privacy.** Never share info about one person with another.
 7. **Close conversations.** Never leave a thread hanging.
