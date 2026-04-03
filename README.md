@@ -82,7 +82,7 @@ Run
 Dev
 ```
 
-See `RUN.md` and `DEV.md` for the full behavioral specs.
+See `modes/RUN.md` and `modes/DEV.md` for the full behavioral specs.
 
 ---
 

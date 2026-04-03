@@ -12,11 +12,11 @@ See `README.md` for setup, directory structure, and settings reference.
 
 ### Run Mode
 
-When the user says **"Run"**, read `RUN.md` and follow it. Start the loop at a **2-minute interval**.
+When the user says **"Run"**, read `modes/RUN.md` and follow it. Start the loop at a **2-minute interval**.
 
 ### Dev Mode
 
-When the user says **"Dev"**, read `DEV.md` and follow it.
+When the user says **"Dev"**, read `modes/DEV.md` and follow it.
 
 ## Tone, Conversation & Privacy
 
