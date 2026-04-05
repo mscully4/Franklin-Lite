@@ -44,7 +44,105 @@ Use `gws-calendar-agenda` to check today's and tomorrow's events each cycle.
 
 Set `notified: true` and save `calendar.json`.
 
-**Post-meeting:** if a meeting ended in the last hour and had a notes doc, check for action items (`gws-drive`). If action items mention the user, create quests.
+**Post-meeting:** for any meeting that ended in the last cycle, run the following gates in order before doing any processing:
+
+**Gate 1 — Did you join?**
+```bash
+gws meet conferenceRecords list --params 'filter=start_time>="<start_ISO>" AND start_time<="<end_ISO>"'
+# Then check participants:
+gws meet conferenceRecords participants list --params parent=<conferenceRecord-name>
+```
+If the user's email is not in the participant list, skip entirely — no further API calls.
+
+**Gate 2 — Is this series opted in?**
+
+Read `state/meeting_series.json` (lazy-initialize with empty skeleton if missing):
+```json
+{ "defaults": { "process_transcript": false, "min_duration_minutes": 10, "max_attendees": 50 }, "series": [], "pending": [] }
+```
+Match the calendar event's `recurringEventId` against `series[].recurring_event_id` (exact), or fall back to case-insensitive substring match on `title_pattern`.
+
+- If a matching entry exists with `process_transcript: true` → proceed.
+- If a matching entry exists with `process_transcript: false` → skip silently.
+- If **no** matching entry exists → check `pending[]` for an entry with the same `recurring_event_id`. If found and `last_asked` is within 7 days, skip. Otherwise, DM the user:
+  > New recurring meeting detected: **"<title>"** — transcript available. Want me to summarize these going forward? Reply `yes` or `no`.
+  Add/update a `pending` entry with `last_asked: <now>`. On `yes` reply: add an opted-in entry to `series[]`, remove from `pending[]`, and process the transcript. On `no`: add an opted-out entry, remove from `pending[]`.
+
+One-off meetings (no `recurringEventId`) are skipped by default.
+
+**Gate 3 — Was it transcribed?**
+```bash
+gws meet transcripts list --params conferenceRecord=<conferenceRecord-name>
+```
+If the list is empty, skip silently — transcription may not have been enabled.
+
+**Notes doc** — if the event had a linked doc, check for action items (`gws-drive`). If any mention the user, create quests.
+
+**Transcript processing** — once all three gates pass:
+
+1. Fetch all transcript entries (paginate):
+   ```bash
+   gws meet transcripts entries list --params parent=<transcript-name>
+   # Paginate using nextPageToken until exhausted
+   ```
+
+2. Spawn a general-purpose subagent with the full transcript text and meeting metadata. Ask it to extract:
+   - `action_items_mine` — action items assigned to the user
+   - `action_items_others` — action items assigned to others `[{owner, task}]`
+   - `decisions` — conclusions reached or agreed upon
+   - `open_questions` — unresolved questions or blockers
+   - `previous_meeting_references` — references to prior discussions (for linking to related quests/summaries)
+   - `metrics` — specific numbers mentioned with context (error rates, latency, etc.) — when present
+   - `design_decisions` — architectural or technical choices made — when present
+   - `key_topics` — 2–5 bullet high-level topics covered — when present
+   - `deadlines` — dates/timeframes mentioned that didn't become formal action items — when present
+
+   Missing fields are omitted rather than returned empty. Per-series extraction overrides can be added to `meeting_series.json` entries later as needed.
+
+3. Write summary to `state/meetings/<YYYY-MM-DD>-<slugified-title>.json`:
+   ```json
+   {
+     "date": "2026-04-05",
+     "title": "Dev Console Standup",
+     "recurring_event_id": "abc123",
+     "conference_record": "conferenceRecords/xyz",
+     "transcript_name": "conferenceRecords/xyz/transcripts/abc",
+     "duration_minutes": 32,
+     "attendees": ["michael.scully@circle.com", "priya@circle.com"],
+     "action_items_mine": ["Follow up with Xavier on the auth migration PR"],
+     "action_items_others": [{ "owner": "Priya", "task": "Update the runbook by EOD" }],
+     "decisions": ["Shifting release cutoff to Thursday"],
+     "open_questions": ["Do we need a feature flag for the new dashboard route?"],
+     "previous_meeting_references": ["Circling back on the auth migration from last week"],
+     "metrics": ["Error rate on /v2/payments at 0.3% over last 24h"],
+     "key_topics": ["Release timeline", "Auth migration", "Dashboard feature flag"],
+     "deadlines": ["Release cutoff Thursday"]
+   }
+   ```
+
+4. Upsert a prose narrative into Chroma (collection: `meetings`). Prose embeds better than raw JSON — compose a natural-language summary from the extracted fields:
+   > "Dev Console Standup on 2026-04-05. Key topics: release timeline, auth migration, dashboard feature flag. Decided to shift release cutoff to Thursday. Michael to follow up with Xavier on the auth migration PR. Open question: do we need a feature flag for the new dashboard route?"
+
+   Metadata: `date`, `title`, `recurring_event_id`, `summary_path` (full path to the JSON file). When a vector search returns this chunk, load `summary_path` for the full structured data.
+
+   Skill: `python3 ~/DevEnv/skills/vector-memory/memory.py`
+
+5. DM user with summary + osascript Hero sound:
+   ```
+   📝 Dev Console Standup — 10:00am (32 min)
+
+   Decisions:
+   • Shifting release cutoff to Thursday
+
+   Action items:
+   • You: Follow up with Xavier on the auth migration PR
+   • Priya: Update the runbook by EOD
+
+   Open questions:
+   • Do we need a feature flag for the new dashboard route?
+   ```
+
+6. Create one quest per item in `action_items_mine`. Set `source.platform: "gws_meet"`, attach `transcript_name` and `summary_path` on the quest for reference.
 
 ### Google Tasks
 

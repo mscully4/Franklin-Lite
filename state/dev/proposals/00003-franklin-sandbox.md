@@ -1,8 +1,8 @@
 ---
 id: proposal-00003
 title: Franklin Sandbox for Code-Change Quests
-status: applied
-applied_at: 2026-04-03
+status: implemented
+implemented_at: 2026-04-03
 created: 2026-04-03
 ---
 
@@ -49,3 +49,6 @@ Scan `~/franklin-sandbox/` for directories whose quest-id has no corresponding a
 - The spawned `claude -p` subprocess inherits `~/.claude/settings.json` globally, so all MCP tools (Slack, Jira, GitHub, Datadog) and skills (`~/DevEnv/skills/`) are available to the subagent without any additional setup
 - `~/franklin-sandbox/` is persistent across reboots — in-progress quest work survives a crash
 - Directory already created at `~/franklin-sandbox/`
+
+## Implementation Notes
+_No divergences from design to record yet._

@@ -45,17 +45,17 @@ Bash 3: date -v-2d +"%Y-%m-%d"                → two_days_ago (macOS)
 Bash 4: date -v-14d +%s                        → dm_self_oldest (macOS)
 ```
 
-Scouts run on different intervals — check `scout_last_run` from `last_run.json` before spawning each one. Only spawn if `now - scout_last_run[scout] >= interval`. If `scout_last_run` is missing for a scout, treat it as never run.
+Scouts run on different intervals — check `scout_last_run` from `last_run.json` before spawning each one. Only spawn if `now - scout_last_run[scout] >= interval_sec`. If `scout_last_run` is missing for a scout, initialize it to `now - interval_sec + phase_sec` (do not treat as never run) — this ensures scouts in the same interval group stay staggered from the first cycle onward.
 
-| Scout | Interval |
-|---|---|
-| `slack_mentions` | every loop (2 min) |
-| `slack_channels` | 10 min |
-| `gws_calendar` | every loop (2 min) |
-| `github` | 10 min |
-| `jira` | 10 min |
-| `gws_gmail` | 30 min |
-| `gws_tasks` | 30 min |
+| Scout | Interval | Phase |
+|---|---|---|
+| `slack_mentions` | 2 min | 0s |
+| `gws_calendar` | 2 min | 60s |
+| `slack_channels` | 10 min | 0s |
+| `github` | 10 min | 180s |
+| `jira` | 10 min | 420s |
+| `gws_gmail` | 30 min | 0s |
+| `gws_tasks` | 30 min | 900s |
 
 Spawn all due scouts in parallel.
 
@@ -252,7 +252,7 @@ See `integrations/GWS.md` for the full GWS Monitor spec (Gmail triage, calendar,
 
 After all integration digests are processed:
 
-- **Upsert** new learnings into the vector store: new `info_received`/`learnings` entries from quest sidecar logs (`quest-{id}.log.json`), new `state/feedback.md` entries, Slack thread summaries (collection: `franklin`)
+- **Upsert** new learnings into the vector store: new `info_received`/`learnings` entries from quest sidecar logs (`quest-{id}.log.json`), new `state/feedback.md` entries, Slack thread summaries (collection: `franklin`); meeting summaries written this cycle (collection: `meetings`)
 - **Query** before executing each active quest: search `collection: "*"` with the quest objective, `k=5`. Inject results as context.
 
 Skill: `python3 ~/DevEnv/skills/vector-memory/memory.py`

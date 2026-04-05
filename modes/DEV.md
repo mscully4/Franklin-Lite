@@ -48,6 +48,7 @@ title: Human-Readable Title
 status: draft | approved | in_progress | implemented | rejected
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
+implemented_at: YYYY-MM-DD  # set when status → implemented
 ---
 
 ## Problem
@@ -83,6 +84,17 @@ Anything unresolved before building.
 | `rejected` | Decided against — keep for record |
 
 Always update `status` and `updated` date when moving between stages.
+
+### Immutability Rule
+
+**Proposals are immutable once `status` reaches `approved`, `implemented`, or `rejected`.** Do not edit the Problem, Research, Proposal, or Design sections after that point. If a change of direction is needed, create a new proposal that references the original by ID.
+
+The one exception: an append-only **Implementation Notes** section at the bottom is allowed after shipping. Use it exclusively to record divergences from the design — what was built differently and why. Do not use it to revise the original intent.
+
+```markdown
+## Implementation Notes
+_Added YYYY-MM-DD — implemented as designed except: <what differed and why>._
+```
 
 ---
 

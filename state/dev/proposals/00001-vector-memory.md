@@ -1,7 +1,7 @@
 ---
 id: proposal-00001
 title: Vector Memory for Franklin
-status: approved
+status: implemented
 created: 2026-03-29
 updated: 2026-03-30
 ---

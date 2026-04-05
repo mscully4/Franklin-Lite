@@ -1,7 +1,7 @@
 ---
 id: proposal-00002
 title: vector-memory Skill
-status: approved
+status: implemented
 created: 2026-03-30
 updated: 2026-03-30
 ---
