@@ -55,7 +55,6 @@ Scouts run on different intervals — check `scout_last_run` from `last_run.json
 | `github` | 10 min | 180s |
 | `jira` | 10 min | 420s |
 | `gws_gmail` | 30 min | 0s |
-| `gws_tasks` | 30 min | 900s |
 
 Spawn all due scouts in parallel.
 

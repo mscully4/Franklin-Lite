@@ -144,10 +144,6 @@ If the list is empty, skip silently — transcription may not have been enabled.
 
 6. Create one quest per item in `action_items_mine`. Set `source.platform: "gws_meet"`, attach `transcript_name` and `summary_path` on the quest for reference.
 
-### Google Tasks
-
-Use `gws-tasks` to check for overdue or due-today tasks. DM the user if any exist.
-
 ### Skills
 
 | Skill | When to use |
@@ -159,7 +155,6 @@ Use `gws-tasks` to check for overdue or due-today tasks. DM the user if any exis
 | `gws-workflow-standup-report` | Generate standup summary on demand |
 | `gws-workflow-weekly-digest` | Weekly summary of meetings + email volume |
 | `gws-workflow-email-to-task` | Convert an email into a Google Task |
-| `gws-tasks` | Check and manage task list |
 | `gws-drive` | Read docs, check for comments or action items |
 | `recipe-find-free-time` | Find a meeting slot across multiple people's calendars |
 | `recipe-block-focus-time` | Block focus time on calendar when user asks |
