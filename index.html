@@ -341,16 +341,21 @@
       }).join('');
 
       // Scheduled tasks
-      const scheduledRows = (d.scheduledTasks ?? []).map(t => `
-        <div class="side-row">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="color:var(--cyan);font-weight:600">${esc(t.id)}</span>
-            <span class="tag tag-purple">${esc(t.every)}</span>
+      const scheduledRows = (d.scheduledTasks ?? []).map(t => {
+        const kindTag = t.kind === 'script'
+          ? '<span class="tag tag-orange" title="shell script">⚡ script</span>'
+          : '<span class="tag tag-blue" title="LLM worker">🧠 worker</span>';
+        return `
+          <div class="side-row">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--cyan);font-weight:600">${esc(t.id)}</span>
+              <span style="display:flex;gap:4px">${kindTag}<span class="tag tag-purple">${esc(t.every)}</span></span>
+            </div>
+            <div class="side-muted">${esc(t.objective)}</div>
+            <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
           </div>
-          <div class="side-muted">${esc(t.objective)}</div>
-          <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
 
       // Completed quests
       const completed = d.completedQuests.map(q => `

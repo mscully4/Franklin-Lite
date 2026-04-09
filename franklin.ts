@@ -12,7 +12,7 @@
  */
 
 import { spawn, spawnSync, execSync } from "child_process";
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, renameSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "./scripts/db.js";
@@ -27,6 +27,7 @@ const WORKER_RESULTS_DIR = join(ROOT, "state", "worker_results");
 const CYCLE_INTERVAL_MS = 30 * 1000;
 const LOCK_STALE_MS = 3 * 60 * 1000;
 const WORKER_TIMEOUT_MS = 10 * 60_000;
+const SCRIPT_TIMEOUT_MS = 60_000; // default for kind: "script" tasks
 const DISPATCH_LOG = join(ROOT, "state", "dispatch_log.jsonl");
 const ACTIVE_WORKERS_FILE = join(ROOT, "state", "active_workers.json");
 
@@ -230,6 +231,9 @@ interface ScheduledTask {
   every: string;        // human-readable interval: "24h", "30m", "7d", "weekdays"
   type: string;
   priority: string;
+  kind?: "worker" | "script";  // "worker" (default) = Claude LLM, "script" = direct shell
+  command?: string;             // shell command for kind: "script"
+  timeout?: number;             // ms, for kind: "script" (default 60s)
   context: Record<string, unknown>;
   last_run?: string;    // ISO 8601 — tracked in the file itself
 }
@@ -289,6 +293,9 @@ function generateScheduledTasks(): DelegationTask[] {
       id: `sched-${job.id}`,
       type: job.type ?? "scheduled",
       priority: job.priority ?? "normal",
+      kind: job.kind,
+      command: job.command,
+      timeout: job.timeout,
       context: { ...job.context, scheduled_task_id: job.id },
       mark_surfaced: null,
     });
@@ -333,6 +340,9 @@ interface DelegationTask {
   id: string;
   type: string;
   priority: string;
+  kind?: "worker" | "script";
+  command?: string;
+  timeout?: number;
   context: Record<string, unknown>;
   mark_surfaced: { id: string; state: Record<string, unknown> } | null;
 }
@@ -454,35 +464,90 @@ async function runQuestAgent(task: DelegationTask): Promise<WorkerResult | null>
   );
 
   const completedAt = new Date().toISOString();
-  const agentStatus = readJson<{ status: string; result: string | null }>(agentStatusFile);
+  const agentStatus = readJson<{ status: string; result: unknown }>(agentStatusFile);
+
+  // Quest agents sometimes write result as an object — normalize to string for DB storage
+  const rawResult = agentStatus?.result;
+  const outcomeStr = rawResult == null ? null : typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult);
 
   const finalStatus = timedOut ? "timeout" : exitCode === 0 ? "ok" : "error";
   const questFinalStatus = timedOut ? "failed" : exitCode === 0 ? "completed" : "failed";
 
-  // Update DB
-  const questDb2 = openDb();
-  questDb2.updateQuestStatus(questId, questFinalStatus, {
-    agent_status: finalStatus === "ok" ? "completed" : "failed",
-    outcome: agentStatus?.result ?? (timedOut ? "timed out" : null),
-  });
-  questDb2.close();
+  // Update DB — wrap in try/catch so a DB error doesn't crash the cycle
+  try {
+    const questDb2 = openDb();
+    questDb2.updateQuestStatus(questId, questFinalStatus, {
+      agent_status: finalStatus === "ok" ? "completed" : "failed",
+      outcome: outcomeStr ?? (timedOut ? "timed out" : undefined),
+    });
+    questDb2.close();
+  } catch (err) {
+    console.error(`[franklin] Failed to update quest DB for ${questId}:`, err);
+  }
 
-  appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
-    dispatched_at: dispatchedAt, completed_at: completedAt,
-    status: finalStatus,
-    summary: agentStatus?.result ?? (timedOut ? "quest agent timed out" : null) });
+  try {
+    appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
+      dispatched_at: dispatchedAt, completed_at: completedAt,
+      status: finalStatus,
+      summary: outcomeStr ?? (timedOut ? "quest agent timed out" : null) });
+  } catch (err) {
+    console.error(`[franklin] Failed to write dispatch log for ${task.id}:`, err);
+  }
 
   return {
     task_id: task.id,
     status: timedOut ? "error" : exitCode === 0 ? "ok" : "error",
     completed_at: completedAt,
-    summary: agentStatus?.result ?? `Quest ${questId} ${timedOut ? "timed out" : "completed"}`,
+    summary: outcomeStr ?? `Quest ${questId} ${timedOut ? "timed out" : "completed"}`,
     error: timedOut ? "timed out" : null,
   };
 }
 
+function runScriptTask(task: DelegationTask): WorkerResult {
+  const dispatchedAt = new Date().toISOString();
+  const timeoutMs = task.timeout ?? SCRIPT_TIMEOUT_MS;
+
+  if (!task.command) {
+    const result: WorkerResult = { task_id: task.id, status: "error", completed_at: new Date().toISOString(),
+      summary: "Script task missing 'command' field", error: "no command" };
+    writeJson(join(WORKER_RESULTS_DIR, `${task.id}.json`), result);
+    appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
+      dispatched_at: dispatchedAt, completed_at: result.completed_at, status: "error", summary: result.summary });
+    return result;
+  }
+
+  console.log(`[franklin] Running script ${task.id}: ${task.command}`);
+  mkdirSync(WORKER_RESULTS_DIR, { recursive: true });
+
+  let stdout = "";
+  let status: WorkerResult["status"] = "ok";
+  let error: string | null = null;
+  try {
+    stdout = execSync(task.command, { cwd: ROOT, timeout: timeoutMs, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch (err: unknown) {
+    status = "error";
+    const e = err as { status?: number; killed?: boolean; stderr?: string; stdout?: string };
+    stdout = (e.stdout ?? "").trim();
+    error = e.killed ? `timed out after ${timeoutMs / 1000}s` : (e.stderr ?? "").trim().slice(-500) || `exit code ${e.status}`;
+    console.error(`[franklin] Script ${task.id} failed:`, error);
+  }
+
+  const completedAt = new Date().toISOString();
+  const summary = stdout.slice(-500) || (status === "ok" ? "completed" : error);
+  const result: WorkerResult = { task_id: task.id, status, completed_at: completedAt, summary: summary ?? "completed", error };
+
+  writeJson(join(WORKER_RESULTS_DIR, `${task.id}.json`), result);
+  appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
+    dispatched_at: dispatchedAt, completed_at: completedAt, status, summary: result.summary });
+
+  return result;
+}
+
 async function runWorker(task: DelegationTask): Promise<WorkerResult | null> {
   const dispatchedAt = new Date().toISOString();
+
+  // Script tasks run shell commands directly — no LLM
+  if (task.kind === "script") return runScriptTask(task);
 
   // Quest tasks get their own long-running agent, not a worker
   if (task.type === "quest") return runQuestAgent(task);
@@ -523,15 +588,20 @@ async function dispatchWorkers(delegation: Delegation): Promise<void> {
     workers: delegation.tasks.map((t) => ({ task_id: t.id, type: t.type, priority: t.priority, started_at: new Date().toISOString() })),
   });
 
-  // Run all workers concurrently — each writes to its own result file, SQLite WAL handles DB contention
-  const results = await Promise.all(delegation.tasks.map((task) => runWorker(task)));
+  // Run all workers concurrently — allSettled so one failure doesn't kill the rest
+  const settled = await Promise.allSettled(delegation.tasks.map((task) => runWorker(task)));
 
   writeJson(ACTIVE_WORKERS_FILE, { updated_at: new Date().toISOString(), workers: [] });
 
   const db = openDb();
   for (let i = 0; i < delegation.tasks.length; i++) {
     const task = delegation.tasks[i];
-    const result = results[i];
+    const outcome = settled[i];
+    if (outcome.status === "rejected") {
+      console.error(`[franklin] Worker ${task.id} crashed:`, outcome.reason);
+      continue;
+    }
+    const result = outcome.value;
     if (result?.status === "ok" && task.mark_surfaced) {
       const { id, state } = task.mark_surfaced;
       console.log(`[franklin] markSurfaced: ${id}`);
@@ -599,6 +669,44 @@ async function runCycle(startedAt: string): Promise<void> {
 
   // filter-signals always runs (drains slack inbox each cycle)
   runFilterSignals();
+
+  // Reap stale quests — if agent file says completed/failed but quest is still active, fix it
+  try {
+    const activeDir = join("state", "quests", "active");
+    const completedDir = join("state", "quests", "completed");
+    const questFiles = readdirSync(activeDir).filter((f) => f.match(/^quest-\d+\.json$/) && !f.includes("agent") && !f.includes("log"));
+    for (const qf of questFiles) {
+      const quest = readJson<Record<string, unknown>>(join(activeDir, qf));
+      if (!quest || quest.status !== "active") continue;
+      const agentFile = join(activeDir, qf.replace(".json", ".agent.json"));
+      const agent = readJson<{ status?: string; result?: unknown }>(agentFile);
+      if (agent && (agent.status === "completed" || agent.status === "failed")) {
+        const qid = qf.replace(".json", "");
+        const rawResult = agent.result;
+        const outcome = rawResult == null ? null : typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult);
+        const finalStatus = agent.status === "completed" ? "completed" : "failed";
+        console.log(`[franklin] Reaping stale quest ${qid} (agent=${agent.status})`);
+        quest.status = finalStatus;
+        quest.agent_status = finalStatus;
+        quest.outcome = outcome ?? `Reaped: agent ${agent.status}`;
+        writeJson(join(activeDir, qf), quest);
+        // Move to completed
+        for (const suffix of [".json", ".agent.json", ".log.json"]) {
+          const src = join(activeDir, qid + suffix);
+          const dst = join(completedDir, qid + suffix);
+          try { renameSync(src, dst); } catch { /* file may not exist */ }
+        }
+        // Update DB
+        try {
+          const reapDb = openDb();
+          reapDb.updateQuestStatus(qid, finalStatus, { agent_status: finalStatus, outcome: outcome ?? undefined });
+          reapDb.close();
+        } catch (err) { console.error(`[franklin] Failed to update DB for reaped quest ${qid}:`, err); }
+      }
+    }
+  } catch (err) {
+    console.error("[franklin] Quest reaper error:", err);
+  }
 
   // Generate deterministic tasks
   const dmTasks = generateDmTasks();

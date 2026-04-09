@@ -41,6 +41,8 @@ export function githubState(entry: GithubEntry): Record<string, unknown> {
     ci_failing: (entry.raw.ci_failing as string[]) ?? [],
     changes_requested: (entry.raw.changes_requested as string[]) ?? [],
     approved: (entry.raw.approved as boolean) ?? false,
+    mergeable_state: (entry.raw.mergeable_state as string) ?? "unknown",
+    review_comments: (entry.raw.review_comments as number) ?? 0,
   };
 }
 

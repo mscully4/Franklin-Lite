@@ -132,8 +132,8 @@ app.get("/api/state", (_req, res) => {
   }));
 
   // Scheduled tasks
-  const scheduledTasks = (readJSON<Array<{ id: string; every: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
-    .map((t) => ({ id: t.id, every: t.every, objective: t.context?.objective ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
+  const scheduledTasks = (readJSON<Array<{ id: string; every: string; kind?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
+    .map((t) => ({ id: t.id, every: t.every, kind: t.kind ?? "worker", objective: t.context?.objective ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
 
   // Inbox stats from DB
   const pending = db.getPendingSlackEvents().length;

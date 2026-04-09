@@ -13,10 +13,24 @@ Also read:
 - `state/quests/active/` — ls this dir for awareness of in-flight quests
 - `state/scheduled_tasks.json` — recurring jobs (if the user asks to add/remove/list scheduled tasks, edit this file directly)
 
-Scheduled task format:
+Scheduled tasks have two kinds:
+
+**Worker tasks** (default) — spawn a Claude worker with LLM reasoning:
 ```json
 { "id": "unique-id", "every": "<frequency>", "type": "scheduled", "priority": "normal", "context": { "objective": "..." } }
 ```
+
+**Script tasks** — run a shell command directly, no LLM involved:
+```json
+{ "id": "unique-id", "every": "<frequency>", "type": "scheduled", "priority": "low", "kind": "script", "command": "npx tsx scripts/foo.ts", "timeout": 30000, "context": { "objective": "description for logs" } }
+```
+
+Use `kind: "script"` for simple, deterministic tasks (cleanup, pruning, health checks with no reasoning needed). Use worker (default) when the task requires judgment, reading context, or interacting conversationally.
+
+Script task fields:
+- `kind`: `"script"` (required for script tasks; omit or `"worker"` for LLM tasks)
+- `command`: shell command string (required for script tasks)
+- `timeout`: ms (optional, default 60s)
 
 Valid `every` values:
 - `"30m"`, `"4h"`, `"7d"`, `"2w"` — any number + `m`/`h`/`d`/`w`
@@ -54,6 +68,31 @@ echo '{"op":"query","collection":"*","text":"<brief description of the task>","k
 Skim the results. If anything is relevant (distance < 0.3), factor it into your approach. If nothing useful comes back, move on — don't force it.
 
 Skip this step for trivial tasks (simple acks, reactions, status checks).
+
+---
+
+## Step 1c — Scope check for dm_reply tasks
+
+If your task type is `dm_reply`, you are a **conversational responder**, not a doer. Your job is to reply to the user — not to execute multi-step work.
+
+**You MAY:**
+- Reply to the user's message (acknowledge, answer questions, provide information)
+- Read things to answer a question (Slack threads, Jira tickets, PRs, dashboards, docs)
+- React to messages
+- Perform quick, single-shot actions the user asked for (add a Jira comment, check a CI status, look something up)
+- Manage scheduled tasks (add/remove/list in `state/scheduled_tasks.json`)
+- Update Franklin's own config files when the user gives feedback or instructions
+
+**You MUST NOT:**
+- Create branches, commits, or pull requests
+- Clone repos or set up sandboxes
+- Run dev workflows, SonarQube scans, or multi-step playbooks
+- Transition Jira ticket statuses through a full workflow (reading status is fine)
+- Do anything that a `quest` task should handle
+
+If the user is asking for real work (write code, create a PR, fix a bug, implement a feature, run a workflow), **acknowledge the request and let the brain create a quest for it.** Reply to the user confirming you're on it, e.g. "Got it — picking this up now." The brain will see the same message and create a quest with the full dev workflow.
+
+**Why:** DM tasks and brain-created quests run in parallel from the same cycle. If a dm_reply worker also does the work, it races with the quest and produces duplicates.
 
 ---
 

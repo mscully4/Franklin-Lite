@@ -79,14 +79,41 @@ An array of raw Slack events, already drained and deduplicated. Every event here
 
 For each signal with `source: "github"`:
 
-Apply judgment — only generate a `pr_monitor` task if:
+The `current_state` now includes:
+- `ci_failing` — array of failing check names
+- `changes_requested` — array of reviewers who requested changes
+- `approved` — boolean
+- `mergeable_state` — `"clean"`, `"behind"`, `"dirty"`, `"blocked"`, or `"unknown"`
+- `review_comments` — count of inline review comments
+
+### Merge state actions
+
+If `mergeable_state` is `"behind"` (branch just needs a rebase, no conflicts):
+- Emit a **script task** — this is a deterministic fix, no LLM needed:
+  ```json
+  {
+    "type": "pr_monitor",
+    "kind": "script",
+    "command": "gh pr update-branch --repo <repo> <number>",
+    "context": { "signal_id": "...", "repo": "...", "number": ..., "reason": "branch behind base" }
+  }
+  ```
+- Do NOT also emit a worker task for the same PR in this cycle.
+
+If `mergeable_state` is `"dirty"` (merge conflict):
+- Emit a normal `pr_monitor` worker task. The worker needs to check out the code and resolve the conflict.
+
+### Standard pr_monitor rules
+
+Generate a `pr_monitor` (worker) task if:
 - `current_state.ci_failing` is non-empty, OR
 - `current_state.changes_requested` is non-empty, OR
-- `current_state.approved === true` AND `current_state.ci_failing` is empty
+- `current_state.review_comments` increased (new inline comments to address), OR
+- `current_state.approved === true` AND `current_state.ci_failing` is empty AND `current_state.mergeable_state` is `"clean"`
 
-A PR with no failures, no changes requested, and not approved needs no action — skip it even if the state technically changed (e.g. head SHA rotated).
+A PR with no failures, no changes requested, no new comments, and not approved needs no action — skip it even if the state technically changed (e.g. head SHA rotated).
 
-One task per PR.
+One task per PR. If a PR is both `behind` and has `ci_failing`, prefer the script rebase first — CI may pass after the rebase.
 
 ---
 
@@ -173,6 +200,8 @@ Write `state/delegation.json`. Always write the file even if `tasks` is empty.
       "id": "task-001",
       "type": "pr_monitor | jira_update | email_notify | dm_reply | quest",
       "priority": "high | normal",
+      "kind": "worker | script (optional, default worker)",
+      "command": "shell command (required when kind is script)",
       "context": { },
       "mark_surfaced": null
     }
@@ -184,6 +213,7 @@ Task IDs are sequential within this run: `task-001`, `task-002`, etc.
 
 ### pr_monitor context
 
+For worker tasks (default):
 ```json
 {
   "signal_id": "github:pr:crcl-main/wallets-api/3077",
@@ -194,7 +224,24 @@ Task IDs are sequential within this run: `task-001`, `task-002`, etc.
   "ci_failing": ["lint"],
   "changes_requested": [],
   "approved": false,
+  "mergeable_state": "clean",
+  "review_comments": 2,
   "dm_channel": "D09TPK162SD or null"
+}
+```
+
+For script tasks (branch behind):
+```json
+{
+  "type": "pr_monitor",
+  "kind": "script",
+  "command": "gh pr update-branch --repo crcl-main/wallets-api 3077",
+  "context": {
+    "signal_id": "github:pr:crcl-main/wallets-api/3077",
+    "repo": "crcl-main/wallets-api",
+    "number": 3077,
+    "reason": "branch behind base"
+  }
 }
 ```
 
@@ -207,7 +254,9 @@ Task IDs are sequential within this run: `task-001`, `task-002`, etc.
   "state": {
     "ci_failing": ["lint"],
     "changes_requested": [],
-    "approved": false
+    "approved": false,
+    "mergeable_state": "clean",
+    "review_comments": 0
   }
 }
 ```

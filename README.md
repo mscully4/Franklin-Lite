@@ -70,7 +70,9 @@ See `modes/worker_wrapper.md` for the full worker prompt.
 
 ## Scheduled Tasks
 
-Recurring jobs defined in `state/scheduled_tasks.json`. The supervisor fires them on schedule — no brain involved.
+Recurring jobs defined in `state/scheduled_tasks.json`. The supervisor fires them on schedule — no brain involved. Tasks come in two kinds:
+
+**Worker tasks** (default) — spawn a Claude worker with LLM reasoning:
 
 ```json
 {
@@ -81,6 +83,23 @@ Recurring jobs defined in `state/scheduled_tasks.json`. The supervisor fires the
   "context": { "objective": "Run daily service health review" }
 }
 ```
+
+**Script tasks** — run a shell command directly, no LLM:
+
+```json
+{
+  "id": "sandbox-cleanup",
+  "every": "daily",
+  "type": "scheduled",
+  "priority": "low",
+  "kind": "script",
+  "command": "npx tsx scripts/cleanup-sandboxes.ts",
+  "timeout": 30000,
+  "context": { "objective": "Clean up stale quest sandbox directories" }
+}
+```
+
+Use `kind: "script"` for deterministic tasks that don't need reasoning (cleanup, pruning, health pings). Script-specific fields: `command` (required), `timeout` in ms (optional, default 60s).
 
 Valid frequencies: `"30m"`, `"4h"`, `"7d"`, `"2w"`, `"daily"`, `"weekdays"`, `"weekly"`
 

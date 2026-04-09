@@ -103,6 +103,10 @@ interface GhReview {
 
 interface GhPrDetail {
   head: { sha: string };
+  mergeable: boolean | null;
+  mergeable_state: string;   // "clean" | "behind" | "dirty" | "blocked" | "unknown"
+  rebaseable: boolean;
+  review_comments: number;
 }
 
 interface GhNotification {
@@ -149,27 +153,43 @@ function repoFromUrl(repoUrl: string): string {
   return repoUrl.replace("https://api.github.com/repos/", "");
 }
 
+interface PrState {
+  reviewedByMe: boolean;
+  reviewState: string | null;
+  headSha: string;
+  myReviewSha: string | null;
+  mergeableState: string;    // "clean" | "behind" | "dirty" | "blocked" | "unknown"
+  mergeable: boolean | null;
+  reviewComments: number;
+}
+
 function getReviewState(
   repo: string,
   number: number,
   cursor: GithubCursor,
   errors: string[],
-): { reviewedByMe: boolean; reviewState: string | null; headSha: string; myReviewSha: string | null } {
+): PrState {
   const prKey = `${repo}#${number}`;
   const cached = cursor.reviewed_prs[prKey];
 
-  const detail = ghApiSafe<GhPrDetail>(`/repos/${repo}/pulls/${number}`, { head: { sha: "" } }, errors);
+  const detail = ghApiSafe<GhPrDetail>(`/repos/${repo}/pulls/${number}`,
+    { head: { sha: "" }, mergeable: null, mergeable_state: "unknown", rebaseable: false, review_comments: 0 }, errors);
   const headSha = detail.head.sha;
+  const mergeableState = detail.mergeable_state ?? "unknown";
+  const mergeable = detail.mergeable ?? null;
+  const reviewComments = detail.review_comments ?? 0;
+
   const reviews = ghApiSafe<GhReview[]>(`/repos/${repo}/pulls/${number}/reviews`, [], errors);
   const myReview = reviews.filter((r) => r.user.login === GITHUB_USER).at(-1);
 
+  const base = { mergeableState, mergeable, reviewComments };
   if (myReview) {
-    return { reviewedByMe: true, reviewState: myReview.state, headSha, myReviewSha: myReview.commit_id };
+    return { ...base, reviewedByMe: true, reviewState: myReview.state, headSha, myReviewSha: myReview.commit_id };
   }
   if (cached) {
-    return { reviewedByMe: true, reviewState: null, headSha, myReviewSha: cached.my_review_sha };
+    return { ...base, reviewedByMe: true, reviewState: null, headSha, myReviewSha: cached.my_review_sha };
   }
-  return { reviewedByMe: false, reviewState: null, headSha, myReviewSha: null };
+  return { ...base, reviewedByMe: false, reviewState: null, headSha, myReviewSha: null };
 }
 
 function searchItemToEntry(
@@ -229,6 +249,9 @@ function pollAuthoredPrs(cursor: GithubCursor, errors: string[]): GithubEntry[] 
       changes_requested: review.reviewState === "CHANGES_REQUESTED" ? [GITHUB_USER] : [],
       approved: review.reviewState === "APPROVED",
       head_sha: review.headSha,
+      mergeable_state: review.mergeableState,
+      mergeable: review.mergeable,
+      review_comments: review.reviewComments,
     });
   });
 }
