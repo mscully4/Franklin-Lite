@@ -5,13 +5,30 @@ state/settings.json
 state/last_run.json
 state/feedback.md
 state/scheduled_quests.json
+state/scheduled_tasks.json
 state/calendar.json
 state/self_improvement_log.json
 state/franklin.lock
+state/active_workers.json
+state/delegation.json
+state/dispatch_log.jsonl
+state/franklin.db
+state/franklin.db-shm
+state/franklin.db-wal
+state/meeting_series.json
+state/server.log
+state/slack_inbox.jsonl
+state/slack_socket.json
+state/socket.lock
 state/quests/active/*.json
 state/quests/completed/*.json
 state/quests/archived/*.json
 state/dev/proposals/*.json
+state/scout_results/*
+state/brain_input/*
+state/worker_results/*
+state/meetings/*
+!state/**/.gitkeep
 
 # Local Claude Code config
 .claude/
@@ -25,3 +42,9 @@ references
 
 # OS
 .DS_Store
+
+# Secrets
+secrets/
+
+# NPM
+node_modules

@@ -10,10 +10,17 @@ Run each cycle when `"gws"` is in `integrations`.
 
 ### Gmail Triage
 
-Use `gws-gmail-triage` to check unread inbox. For each unread email:
+Fetch unread inbox:
+```bash
+gws gmail +triage --format json --max 20 | jq '.messages | map({id, from, subject, date})'
+```
+
+For each email in the result:
 - From a teammate or manager → DM the user with sender, subject, one-line summary. Log as `info_received`.
 - Automated/bot emails (GitHub, Jira, Slack notifications, marketing) → skip silently.
 - Requires a reply → create a quest with the draft reply for user approval.
+
+To read a full email thread: use `gws-gmail` skill with the `id` from above.
 
 ### Calendar
 
@@ -29,9 +36,14 @@ Use `gws-calendar-agenda` to check today's and tomorrow's events each cycle.
 }
 ```
 
+Fetch today's events:
+```bash
+gws calendar +agenda --today --format json | jq '.events | map({summary, start, end, calendar, location})'
+```
+
 **Each cycle:**
 1. Check if `calendar.json` → `date` matches today. If not, reset to `{ "date": "<today>", "events": [] }`.
-2. Fetch today's full event list. Merge into `calendar.json`:
+2. Fetch today's full event list using the command above. Merge into `calendar.json`:
    - Add new events.
    - Remove dropped meetings → DM user + macOS notification.
    - Update changed fields (title, time) → DM user + macOS notification.
@@ -48,11 +60,18 @@ Set `notified: true` and save `calendar.json`.
 
 **Gate 1 — Did you join?**
 ```bash
-gws meet conferenceRecords list --params 'filter=start_time>="<start_ISO>" AND start_time<="<end_ISO>"'
+gws meet conferenceRecords list --params 'filter=start_time>="<start_ISO>" AND start_time<="<end_ISO>"' \
+  | jq '[.conferenceRecords[]? | {name, startTime, endTime, spaceId: .space}]'
+
 # Then check participants:
-gws meet conferenceRecords participants list --params parent=<conferenceRecord-name>
+gws meet conferenceRecords participants list --params parent=<conferenceRecord-name> \
+  | jq '[.participants[]? | {name, email: .signedinUser.email}]'
 ```
-If the user's email is not in the participant list, skip entirely — no further API calls.
+- If the user's email **is** in the participant list → continue to Gate 2.
+- If the user's email **is not** in the participant list → DM the user once per meeting:
+  > You weren't in **"<title>"** (<time>, <duration> min) — want me to pull the transcript anyway?
+
+  On `yes`: continue to Gate 2. On `no` or no reply within one cycle: skip silently. Do not re-ask.
 
 **Gate 2 — Is this series opted in?**
 
@@ -72,7 +91,8 @@ One-off meetings (no `recurringEventId`) are skipped by default.
 
 **Gate 3 — Was it transcribed?**
 ```bash
-gws meet transcripts list --params conferenceRecord=<conferenceRecord-name>
+gws meet transcripts list --params conferenceRecord=<conferenceRecord-name> \
+  | jq '[.transcripts[]? | {name, startTime}]'
 ```
 If the list is empty, skip silently — transcription may not have been enabled.
 
@@ -82,7 +102,8 @@ If the list is empty, skip silently — transcription may not have been enabled.
 
 1. Fetch all transcript entries (paginate):
    ```bash
-   gws meet transcripts entries list --params parent=<transcript-name>
+   gws meet transcripts entries list --params parent=<transcript-name> \
+     | jq '[.transcriptEntries[]? | {participantName: .participant, text, startTime}]'
    # Paginate using nextPageToken until exhausted
    ```
 
@@ -99,7 +120,7 @@ If the list is empty, skip silently — transcription may not have been enabled.
 
    Missing fields are omitted rather than returned empty. Per-series extraction overrides can be added to `meeting_series.json` entries later as needed.
 
-3. Write summary to `state/meetings/<YYYY-MM-DD>-<slugified-title>.json`:
+3. Write summary to `state/meetings/<YYYY>/<MM>/<DD>/<slugified-title>.json` (partitioned by date for faster lookups):
    ```json
    {
      "date": "2026-04-05",
@@ -127,30 +148,48 @@ If the list is empty, skip silently — transcription may not have been enabled.
 
    Skill: `python3 ~/DevEnv/skills/vector-memory/memory.py`
 
-5. DM user with summary + osascript Hero sound:
+5. DM user with summary + osascript Hero sound. Include every non-empty field from the extracted summary:
    ```
    📝 Dev Console Standup — 10:00am (32 min)
+
+   Key topics:
+   • Release timeline
+   • Auth migration
+   • Dashboard feature flag
 
    Decisions:
    • Shifting release cutoff to Thursday
 
    Action items:
-   • You: Follow up with Xavier on the auth migration PR
+   • You: Follow up with Xavier on the auth migration PR → DEV-1234
    • Priya: Update the runbook by EOD
 
    Open questions:
    • Do we need a feature flag for the new dashboard route?
-   ```
 
-6. Create one quest per item in `action_items_mine`. Set `source.platform: "gws_meet"`, attach `transcript_name` and `summary_path` on the quest for reference.
+   Deadlines:
+   • Release cutoff Thursday
+
+   Metrics:
+   • Error rate on /v2/payments at 0.3% over last 24h
+   ```
+   Omit any section that has no entries. Always include action items and decisions if present — these are never optional.
+
+6. For each item in `action_items_mine`:
+   - **Infer the Jira project** using meeting context (title, key topics, attendees). If a `jira_project` is set on the series entry in `meeting_series.json`, use that directly. Otherwise, query available epics via `mcp__mcp-atlassian__searchJiraIssuesUsingJql` (`issuetype = Epic AND assignee = currentUser() ORDER BY updated DESC`) and match against the action item and meeting context. If it's still ambiguous, DM the user:
+     > What Jira project should I use for action items from **"<title>"**? (e.g. `DEV`, `ARC`) — or reply with an epic key to link directly.
+     Pause ticket creation for that item until the user replies. Once set, store `jira_project` on the series entry for future meetings.
+   - Create a Jira ticket using the `jira-ticket` skill. Set status to `In Progress`.
+   - Create a quest with `source.platform: "gws_meet"`. Store `transcript_name` and the Jira ticket key (`source.ticket_key`) on the quest.
+   - Include the Jira ticket URL in the DM summary alongside each action item.
 
 ### Skills
 
 | Skill | When to use |
 |---|---|
-| `gws-gmail-triage` | Check unread inbox each cycle |
+| ~~`gws-gmail-triage`~~ | Replaced by `gws gmail +triage --format json \| jq` (see above) |
 | `gws-gmail` | Read full email threads, send replies (with approval) |
-| `gws-calendar-agenda` | Check today/tomorrow's calendar |
+| ~~`gws-calendar-agenda`~~ | Replaced by `gws calendar +agenda --today --format json \| jq` (see above) |
 | `gws-workflow-meeting-prep` | Pre-meeting briefing (attendees, agenda, linked docs) |
 | `gws-workflow-standup-report` | Generate standup summary on demand |
 | `gws-workflow-weekly-digest` | Weekly summary of meetings + email volume |

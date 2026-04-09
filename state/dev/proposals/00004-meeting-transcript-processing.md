@@ -142,7 +142,7 @@ for each meeting that ended in the last cycle:
   4. Fetch all transcript entries (paginate)
   5. Spawn subagent with transcript entries + meeting metadata
      → returns structured extraction (see above)
-  6. Write summary to state/meetings/<YYYY-MM-DD>-<slugified-title>.json
+  6. Write summary to state/meetings/<YYYY>/<MM>/<DD>/<slugified-title>.json
   7. Upsert prose summary into Chroma (collection: "meetings")
   8. DM user with summary + osascript Hero sound
   9. Create quests for action items in action_items_mine
@@ -153,7 +153,17 @@ Note: gate order swapped from naive order — series config checked before hitti
 
 ### Summary Storage
 
-`state/meetings/<YYYY-MM-DD>-<slugified-title>.json`:
+`state/meetings/<YYYY>/<MM>/<DD>/<slugified-title>.json` (partitioned by date for faster lookups):
+
+```
+state/meetings/
+  2026/
+    04/
+      04/
+        dev-console-standup.json
+      09/
+        billing-sync.json
+```
 
 ```json
 {

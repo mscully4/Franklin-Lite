@@ -4,6 +4,16 @@ Read this file when operating in **Run mode**. Do not read it during Dev mode.
 
 ---
 
+## Architecture
+
+Franklin uses a two-tier agent model:
+
+- **Scheduler** (persistent) — owns the lock file, updates heartbeat, spawns cycle agents on a 2-minute interval. Never reads Slack, never touches quests.
+- **Cycle agent** (ephemeral) — spawned fresh every 2 minutes with state loaded from disk. Runs scouts, categorizes messages, dispatches work, writes state, exits. Clean context every cycle.
+- **Quest agents** (background) — spawned by the cycle agent for long-running work (code changes, PR reviews). Run in the background; cycle agent polls them via task ID each cycle without blocking.
+
+---
+
 ## Startup Checklist
 
 1. Check `state/franklin.lock` — abort if heartbeat is <4 minutes old (another instance running).
@@ -20,9 +30,39 @@ Read this file when operating in **Run mode**. Do not read it during Dev mode.
    ```
    ❌ Franklin startup failed — <integration> is unreachable. Fix the integration and restart.
    ```
-4. Reconcile `state/scheduled_quests.json` with `CronList` — add missing jobs, remove duplicates.
-5. Scan `~/franklin-sandbox/` for directories whose quest-id has no corresponding active quest file — delete them.
-6. Confirm start to the user, then begin the loop.
+4. **Ensure `server.js` is running** — check for the process and start it if not:
+   ```bash
+   pgrep -f "node server.js" > /dev/null || nohup node /Users/michael.scully/YAAS/server.js >> /tmp/franklin-server.log 2>&1 &
+   ```
+   Log the PID if started. No action needed if already running.
+5. Reconcile `state/scheduled_quests.json` with `CronList` — add missing jobs, remove duplicates.
+6. Scan `~/franklin-sandbox/` for directories whose quest-id has no corresponding active quest file — delete them.
+7. Confirm start to the user, then begin the scheduler loop.
+
+---
+
+## Scheduler Loop
+
+Every 2 minutes the scheduler:
+
+1. Updates `last_heartbeat` in `state/franklin.lock`.
+2. Reads `state/last_run.json`, `state/settings.json`, and all active quest files from `state/quests/active/`.
+3. Spawns a **cycle agent** (see Cycle Agent Prompt below) with those contents injected as input.
+4. Waits for the cycle agent to complete.
+5. Repeats.
+
+The scheduler never reads Slack, never processes quests, never sends messages. Its only jobs are heartbeat and spawning.
+
+---
+
+## Cycle Agent Prompt
+
+The cycle agent is spawned with the following inputs injected:
+- Full contents of `state/last_run.json`
+- Full contents of `state/settings.json`
+- Summary of each active quest: `id`, `objective`, `status`, `agent_status`, `agent_task_id`, `updated_at`
+
+The cycle agent prompt is the content of this file from **Run Loop** onward. It reads no additional state unless actively working a quest.
 
 ---
 
@@ -30,10 +70,19 @@ Read this file when operating in **Run mode**. Do not read it during Dev mode.
 
 ### Step 1 — Load State
 
-- Update `last_heartbeat` in `state/franklin.lock` first.
-- Read `state/last_run.json` (`last_run_completed`, `last_slack_query_ts`, `scout_last_run`).
+- Read `state/last_run.json` (`last_run_completed`, `last_drain_ts`, `last_slack_query_ts`, `scout_last_run`).
 - Read `state/settings.json` (`mode`, `user_profile`, `authorized_users`, `integrations`).
-- Load all quest files from `state/quests/active/` only.
+- Active quest summaries are already injected — load full quest files only when actively working a quest.
+
+### Step 1.5 — Poll Running Quest Agents
+
+For each active quest with `agent_status: "running"`:
+
+1. Call `TaskOutput(task_id: agent_task_id, block: false)`
+2. **Still running** → skip, continue
+3. **Completed** → parse result, update quest file (`agent_status: null`, `agent_task_id: null`), DM user with summary, log to quest sidecar
+4. **Error (stale task ID)** — task IDs don't survive session restarts; if `TaskOutput` errors, clear `agent_task_id`, set `agent_status: null`, re-spawn the quest agent
+5. **Running for >1 hour** — DM user: _"Quest [id] ([objective]) has been running for over an hour — I'll keep watching it, but wanted to flag it."_ Do not re-spawn.
 
 ### Step 2 — Poll Integrations
 
@@ -42,208 +91,167 @@ Capture timestamps **before** any queries. Run these Bash commands in parallel (
 Bash 1: date -u +"%Y-%m-%dT%H:%M:%SZ"        → new_last_run_completed
 Bash 2: date +%s                               → append .000000 → new_slack_query_ts
 Bash 3: date -v-2d +"%Y-%m-%d"                → two_days_ago (macOS)
-Bash 4: date -v-14d +%s                        → dm_self_oldest (macOS)
+Bash 4: date -v-1d +"%Y-%m-%d"                → yesterday_date (macOS)
 ```
 
-Scouts run on different intervals — check `scout_last_run` from `last_run.json` before spawning each one. Only spawn if `now - scout_last_run[scout] >= interval_sec`. If `scout_last_run` is missing for a scout, initialize it to `now - interval_sec + phase_sec` (do not treat as never run) — this ensures scouts in the same interval group stay staggered from the first cycle onward.
+All scouts run inline — no subagents. Check `scout_last_run` before each; skip if interval hasn't elapsed. Run all due scouts in parallel using multiple tool calls.
 
 | Scout | Interval | Phase |
 |---|---|---|
-| `slack_mentions` | 2 min | 0s |
-| `gws_calendar` | 2 min | 60s |
+| `slack_inbox` | every cycle | 0s |
+| `slack_scout` | 10 min | 0s |
+| `gws_calendar` | 10 min | 60s |
 | `slack_channels` | 10 min | 0s |
 | `github` | 10 min | 180s |
 | `jira` | 10 min | 420s |
 | `gws_gmail` | 30 min | 0s |
+| `gws_meet` | 15 min | 0s |
 
-Spawn all due scouts in parallel.
-
-**Never process raw API/Slack responses in the main loop — subagents return compact JSON digests only.**
-
----
-
-#### Slack Mentions Subagent Prompt (`slack_mentions` — every loop)
-
-```
-You are Franklin's Slack mentions scout. Fetch all new mentions and DM activity since last_slack_query_ts. Do NOT take any actions — read only.
-
-Inputs:
-- slack_user_id: {slack_user_id}
-- last_slack_query_ts: {last_slack_query_ts}
-- yesterday_date: {yesterday_date}
-- two_days_ago: {two_days_ago}  ← date string 2 days before today, e.g. "2026-03-30"
-- active_quests: {list of quest IDs with their source.channel and source.thread_ts}
-- dm_self_oldest: {Unix epoch, 14 days ago}  ← for self-DM thread lookback
-
-Fetch ALL of the following in parallel:
-1. Direct mentions: search '<@{slack_user_id}> after:{yesterday_date}', filter ts > last_slack_query_ts
-2. Usergroup mentions: search '@stablecoin-solutions-org after:{yesterday_date}' and '@stablecoin-console-dev-only after:{yesterday_date}', skip messages from the user themselves, filter ts > last_slack_query_ts
-3. Self-tags: search 'from:<@{slack_user_id}> <@{slack_user_id}>'
-4. Self-DM channel (D09TPK162SD): call slack_read_channel(D09TPK162SD, limit=100, oldest=dm_self_oldest). Process two cases:
-   - New top-level messages: ts > last_slack_query_ts (include directly, no thread fetch needed unless reply_count > 0)
-   - Existing threads with new replies: latest_reply_ts > last_slack_query_ts AND ts <= last_slack_query_ts → call slack_read_thread(D09TPK162SD, thread_ts, oldest=last_slack_query_ts)
-5. Quest threads: for each active quest with a source.thread_ts, read that thread since last_slack_query_ts using slack_read_thread
-6. @franklin name mentions: search '@franklin after:{two_days_ago}', filter ts > last_slack_query_ts. Use two_days_ago (not yesterday_date) to guard against Slack search indexing lag.
-
-Return ONLY this JSON (no prose):
-{
-  "messages": [
-    {
-      "ts": "...",
-      "channel": "...",
-      "thread_ts": "...",
-      "author": "...",
-      "type": "direct_mention | usergroup_mention | self_tag | dm | quest_thread_reply | franklin_name_mention",
-      "summary": "one sentence",
-      "needs_action": true/false,
-      "quest_id": "quest-xxx or null",
-      "permalink": "..."
-    }
-  ]
-}
-Only include messages that need Franklin's attention (needs_action: true) or are replies to active quests.
-```
+If `scout_last_run` is missing for a scout, initialize to `now - interval_sec + phase_sec` (never treat as never-run).
 
 ---
 
-#### Slack Channels Subagent Prompt (`slack_channels` — every 10 min)
+### Step 2.1 — Slack Inbox Drain (every cycle)
 
+**Socket health check** — read `state/slack_socket.json`. If `status` is not `connected` or `updated_at` is >5 minutes old, DM user: _"⚠️ Slack socket appears down — falling back to poll-based DM intake. Check `server.js`."_ Log the issue and continue (fallback below).
+
+**Drain inbox** — read `state/slack_inbox.jsonl`, collect all lines with `event_ts > last_drain_ts`. Deduplicate on `event_ts`. Normalize each raw Slack event into the scout entry shape:
+
+| Event type | `source` tag |
+|---|---|
+| `message` with `channel_type: "im"` | `dm_new` |
+| `app_mention` | `direct_mention` |
+| `reaction_added` with `reaction: "whiskey"` added by authorized user | `whiskey_reaction` |
+| `message` with `channel_type: "channel"` or `"group"` | `channel_message` |
+
+After processing, advance `last_drain_ts` in `last_run.json` to the highest `event_ts` seen.
+
+**Socket down fallback** — if socket is unhealthy, also run the legacy DM poll:
+```bash
+npx tsx scripts/slack_conversations.ts scout \
+  --last-ts {last_drain_ts} \
+  --user-id {slack_user_id} \
+  --yesterday {yesterday_date} \
+  --two-days-ago {two_days_ago} \
+  --quest-threads '[]'
 ```
-You are Franklin's Slack channels scout. Check ops channels for alerts and deploy approvals since last_slack_query_ts. Do NOT take any actions — read only.
 
-Inputs:
-- last_slack_query_ts: {last_slack_query_ts}
+### Step 2.1b — Slack Scout (script, every 10 min)
 
-Fetch ALL of the following in parallel:
-1. #warn-developer-services: read channel since last_slack_query_ts
-2. #deploy-bot (CTDAN6570): read full channel since last_slack_query_ts
+Covers sources socket mode can't reach: quest thread replies in non-bot channels, `@franklin` name mentions, usergroup mentions.
 
-Return ONLY this JSON (no prose):
-{
-  "messages": [
-    {
-      "ts": "...",
-      "channel": "...",
-      "thread_ts": "...",
-      "author": "...",
-      "type": "ops_alert | ops_info",
-      "summary": "one sentence",
-      "needs_action": true/false,
-      "permalink": "..."
-    }
-  ],
-  "deploy_approvals": [
-    {
-      "ts": "...",
-      "thread_ts": "...",
-      "service": "inferred service name (e.g. entitlement-service)",
-      "description": "what the deploy does",
-      "requester": "who requested it",
-      "permalink": "..."
-    }
-  ]
-}
-Include all deploy_approvals found in #deploy-bot since last_slack_query_ts that tag the user as approver.
+```bash
+npx tsx scripts/slack_conversations.ts scout \
+  --last-ts {last_drain_ts} \
+  --user-id {slack_user_id} \
+  --yesterday {yesterday_date} \
+  --two-days-ago {two_days_ago} \
+  --quest-threads '{json array of [{channel, thread_ts, quest_id}] for active quests with source.thread_ts set}'
 ```
+
+**Judgment pass** — for all messages from both inbox drain and scout, add:
+- `summary`: one sentence
+- `needs_action`: true/false
+- `quest_id`: match against active_quests by channel + thread_ts if not already set
+
+**Filter** — keep a message if ANY is true:
+- `needs_action` is true
+- `source` is `dm_new` (always process — bot DM is the task inbox)
+- `source` is `quest_thread_reply` or `channel_message` for an active quest
+- `source` is `direct_mention` or `franklin_name_mention` (never drop regardless of needs_action)
+- `source` is `whiskey_reaction` (always process — see whiskey intake below)
 
 ---
 
-#### Jira Subagent Prompt
+### Step 2.2 — Slack Channels (inline, every 10 min)
 
-```
-You are Franklin's Jira scout. Check for Jira activity and return a compact JSON digest. Do NOT make any changes — read only.
+Run in parallel — MCP calls, no jq:
 
-Inputs:
-- cloudId: 7b8cc500-2d38-47c5-a985-b15fb9cad035
-- last_run_completed: {last_run_completed}
-- active_jira_quests: {list of quest IDs with their source.ticket_key and last known status}
+1. `slack_read_channel(#warn-developer-services, oldest=last_slack_query_ts)`
+2. `slack_read_channel(CTDAN6570, oldest=last_slack_query_ts)`
 
-Do ALL of the following:
-1. Query assigned in-progress tickets: 'assignee = currentUser() AND statusCategory = "In Progress" ORDER BY updated DESC'
-2. For each ticket already in active_jira_quests, check for new comments or status changes since last_run_completed
-3. For each active Jira quest, check for linked PRs (GitHub URLs in comments, description, or remote links via getJiraIssueRemoteIssueLinks). For any PR found, run: gh pr view <url> --json state,reviews,statusCheckRollup,mergedAt
-4. Check: ticket in progress 7+ days with no update, sprint deadline within 2 days
-
-Return ONLY this JSON:
-{
-  "changes": [
-    {
-      "ticket_key": "...",
-      "type": "new_ticket | status_change | new_comment | pr_opened | pr_merged | pr_ci_failing | pr_changes_requested | stale_ticket | sprint_deadline",
-      "summary": "one sentence",
-      "needs_dm": true/false,
-      "quest_id": "quest-xxx or null",
-      "pr_url": "... or null",
-      "details": "any extra info needed to act"
-    }
-  ]
-}
-```
-
-**Jira action rules:**
-- `new_ticket` → create quest with `source.platform: "jira"`, DM user only if genuinely new
-- `status_change` / `new_comment` → log as `info_received` on existing quest
-- `pr_opened` + ticket is `To Do` → transition to `In Progress`, add PR link comment (use `update-ticket-after-pr`)
-- `pr_merged` + ticket is `In Progress` → transition to `In Review` or `Done` (use `update-ticket-after-pr`)
-- `pr_ci_failing` → DM user with failing checks
-- `pr_changes_requested` → DM user with summary
-- `stale_ticket` → DM user: _"ticket-key has been in progress for X days — any blockers?"_
-- `sprint_deadline` → DM user with heads-up
-
-In `drafts_only` mode, draft Jira comments and transitions for user approval. In `allow_send` mode, post directly.
-
-When creating/updating a Jira ticket from a Slack conversation, include the Slack permalink as: `Slack thread: <permalink>`
-
-Skills: `jira-ticket`, `update-ticket-after-pr`, `scrum-master`
+For each message: classify as `ops_alert` (incident/degradation/alert) or `ops_info`. Extract any deploy approval requests from #deploy-bot that tag the user as approver (note service name, description, requester).
 
 ---
 
-#### GitHub Subagent Prompt
+### Step 2.3 — GitHub (inline, every 10 min)
 
-```
-You are Franklin's GitHub scout. Check for PR activity and return a compact JSON digest. Do NOT make any changes — read only.
+Run all three in parallel:
 
-Inputs:
-- last_run_completed: {last_run_completed}
-
-Run ALL of the following in parallel using the gh CLI:
-1. gh pr list --author @me --state open --json number,title,url,headRefName,reviews,statusCheckRollup
-2. gh pr list --reviewer @me --state open --json number,title,url,author,reviews
-3. gh search prs --involves @me --state open --json number,title,url,repository
-
-For each PR, compare against last_run_completed to detect: CI newly failing, review requested, changes requested, approval + all checks passing, PR merged. Extract Jira ticket key from branch name (pattern [A-Z]+-[0-9]+).
-
-Return ONLY this JSON:
-{
-  "changes": [
-    {
-      "pr_number": 123,
-      "pr_url": "...",
-      "title": "...",
-      "type": "ci_failing | review_requested | changes_requested | approved_ready | review_needed | merged",
-      "summary": "one sentence",
-      "jira_ticket": "SCP-123 or null",
-      "details": "failing check names, reviewer name, etc."
-    }
-  ]
-}
+```bash
+gh pr list --author @me --state open \
+  --json number,title,url,headRefName,reviews,statusCheckRollup \
+| jq '[.[] | {
+    number, title, url,
+    jira_key: (.headRefName | capture("(?P<k>[A-Z]+-[0-9]+)").k // null),
+    ci_failing: [.statusCheckRollup[]? | select(.conclusion == "FAILURE") | .name],
+    changes_requested: [.reviews[]? | select(.state == "CHANGES_REQUESTED") | .author.login],
+    approved: ([.reviews[]? | select(.state == "APPROVED")] | length > 0)
+  }]'
 ```
 
-**GitHub action rules:**
-- `ci_failing` → DM user with failing check names and PR link
-- `review_requested` → DM user: _"PR #X has a new review request from Y"_
-- `changes_requested` → DM user with feedback summary (use `analyze-pr` for full summary)
-- `approved_ready` → DM user: _"PR #X is ready to merge"_
-- `review_needed` → DM user with PR title, author, link; nudge again if waiting >24h
-- `merged` + `jira_ticket` set → invoke `update-ticket-after-pr`
+```bash
+gh pr list --reviewer @me --state open \
+  --json number,title,url,author,reviews \
+| jq '[.[] | {number, title, url, author: .author.login}]'
+```
+
+```bash
+gh search prs --involves @me --state open \
+  --json number,title,url,repository \
+| jq '[.[] | {number, title, url, repo: .repository.nameWithOwner}]'
+```
+
+**Action rules:**
+- `ci_failing` non-empty → DM user with failing check names and PR link
+  - **Exception (policy gates):** if the only failing checks are known policy gates with a documented auto-resolution date (e.g. StepSecurity NPM Package Cooldown — 7-day cooldown, auto-clears after the window), AND the user has already been notified today for this PR/check (check quest log or `last_run.json` for a `message_sent` entry on the same date for this PR URL + check name), skip the DM. Resume daily once the auto-resolution date has passed.
+- `changes_requested` non-empty → DM user with summary (use `analyze-pr` for full summary)
+- `approved: true` + no `ci_failing` → DM user: _"PR #X is ready to merge"_
+- reviewer list has PRs not in author list → DM user with title, author, link; nudge again if waiting >24h
+- `jira_key` set on a merged PR → invoke `update-ticket-after-pr`
 
 Skills: `analyze-pr`, `create-pr`, `update-ticket-after-pr`
 
 ---
 
-#### GWS Subagent
+### Step 2.4 — Jira (inline, every 10 min)
 
-See `integrations/GWS.md` for the full GWS Monitor spec (Gmail triage, calendar, tasks).
+Run in parallel:
+
+**A.** `searchJiraIssuesUsingJql` with:
+- `jql`: `assignee = currentUser() AND statusCategory = "In Progress" ORDER BY updated DESC`
+- `fields`: `["key", "summary", "status", "updated", "comment"]`
+- `maxResults`: 20
+
+For each ticket: check if latest comment's `created` > `last_run_completed` → flag as `new_comment`. Check if `updated` < 7 days ago → flag `stale`. Check sprint end date < 2 days away → flag `sprint_deadline`.
+
+**B.** For each active Jira quest with a known PR URL, run:
+```bash
+gh pr view <url> \
+  --json number,state,mergedAt,reviews,statusCheckRollup \
+| jq '{number, state, mergedAt,
+    ci_failing: [.statusCheckRollup[]? | select(.conclusion == "FAILURE") | .name],
+    changes_requested: [.reviews[]? | select(.state == "CHANGES_REQUESTED") | .author.login],
+    approved: ([.reviews[]? | select(.state == "APPROVED")] | length > 0)}'
+```
+
+**Action rules:**
+- `new_comment` → log as `info_received` on quest
+- `pr_merged` + ticket `In Progress` → transition to `In Review`/`Done` (use `update-ticket-after-pr`)
+- `ci_failing` on linked PR → DM user with failing checks
+- `changes_requested` on linked PR → DM user with summary
+- `stale_ticket` → DM user: _"DEV-XXXX has been in progress for X days — any blockers?"_
+- `sprint_deadline` → DM user with heads-up
+
+**Transition rule (always applies):** Whenever Franklin transitions a Jira ticket to any new status, immediately post a comment on the ticket explaining: (1) what the new status is, (2) why Franklin moved it (e.g. "PR #X was merged"), and (3) that this was done automatically by Franklin. Example: _"Transitioned to In Review — PR #42 was merged into main. (Automated by Franklin)"_
+
+Skills: `jira-ticket`, `update-ticket-after-pr`, `scrum-master`
+
+---
+
+### Step 2.5 — GWS (inline)
+
+See `integrations/GWS.md` for Gmail, Calendar, and Meet specs (all updated with CLI+jq filters).
 
 ---
 
@@ -263,7 +271,7 @@ On first run: run `python3 ~/DevEnv/skills/vector-memory/backfill.py` first.
 
 For each message in the Slack digest:
 
-**a. New quest trigger** — authorized user tagged themselves in any message. This is the ONLY trigger.
+**a. New quest trigger** — DM from authorized user to Franklin bot (source: `dm_new`) containing a task request. This is the ONLY trigger.
 - Create quest in `state/quests/active/` with status `pending_approval`.
 - DM the user: objective understood, proposed approach, ask for approval.
 
@@ -276,7 +284,12 @@ For each message in the Slack digest:
 - Substantive tasks → create quest with `pending_approval`, DM to confirm.
 - All replies go in a thread reply to the triggering message. Always tag `<@{slack_user_id}>`.
 
-**b3. Informational tag** — authorized user tagged Franklin in someone else's message:
+**b3. Any other DM from the user (no @franklin mention):**
+- Always send a reply ACK in-thread — even if only "Got it." or "On it." The user must never be left wondering if Franklin saw the message.
+- If the message triggers a quest or action, the ACK should state what Franklin is doing: _"Got it — creating a quest to [X]."_
+- If purely informational (user note to themselves), acknowledge briefly: _"Noted."_
+
+**b4. Informational tag** — authorized user tagged Franklin in someone else's message:
 - Read the full thread for context.
 - Log to `state/feedback.md` under `## Learnings` with timestamp, permalink, and summary.
 - If relevant to an active quest, log as `info_received` on that quest.
@@ -303,7 +316,16 @@ For each message in the Slack digest:
 
 If Datadog has no staging data, note it and leave recommendation neutral.
 
-**f. Feedback about Franklin:**
+**f. Whiskey intake** (`source: "whiskey_reaction"`) — user reacted 🥃 to flag a message for Franklin to absorb:
+1. Fetch the full thread: `npx tsx scripts/slack_conversations.ts thread <channel> <ts> --json`
+2. Synthesize what's useful (domain knowledge, decision, context, link) and write it to the appropriate file under `knowledge/`. If unsure where it belongs, append to `knowledge/Notes.md`.
+3. If the content implies an action item, create a quest (`pending_approval`) and DM user.
+4. React ✅: `npx tsx scripts/slack_conversations.ts react <channel> <ts> white_check_mark`
+5. React 🦝 (general ACK — same as all processed messages, see Step 4).
+
+The ✅ reaction is the authoritative "handled" flag — no state in `last_run.json`. If Franklin crashes before step 4, the item is re-processed next cycle (knowledge writes are idempotent).
+
+**g. Feedback about Franklin:**
 - Log to `state/feedback.md` with timestamp, who, permalink, content.
 - Acknowledge politely. Never argue.
 
@@ -315,11 +337,17 @@ If Datadog has no staging data, note it and leave recommendation neutral.
 > Franklin↔Michael communication is always sent directly, never drafted.
 > When an authorized user directly tags Franklin in any channel or thread (group or DM), respond directly in-thread — never draft. `drafts_only` only governs proactive outbound messages Franklin initiates on its own.
 
+**General ACK** — after processing any message (DM, @mention, quest reply, whiskey intake), react 🦝 `:raccoon:` to it via:
+```bash
+npx tsx scripts/slack_conversations.ts react <channel> <ts> raccoon
+```
+Then send a text reply only if there's something meaningful to say (quest created, action taken, question to answer). A plain "Got it." is replaced by the 🦝 reaction — less noise.
+
 After every Slack DM to user: fire `osascript -e 'display notification "..." with title "Franklin ☕" subtitle "New message" sound name "Blow"'`
 
 #### PR Review Quests
 
-When the quest is to review a PR (e.g. "review PR #123 in wallets-api"):
+When the quest is to review a PR (e.g. "review PR #123 in wallets-api"), spawn a **background quest agent** (`run_in_background: true`). Store the returned task ID on the quest (`agent_task_id`, `agent_status: "running"`). The quest agent should:
 
 1. `mkdir -p ~/franklin-sandbox/<quest-id>`
 2. Clone the fork: `git clone git@github.com-emu:michael-scully_crcl/<repo-name>.git ~/franklin-sandbox/<quest-id>/<repo-name>`
@@ -334,7 +362,7 @@ When the quest is to review a PR (e.g. "review PR #123 in wallets-api"):
 
 #### Code-Change Quests
 
-See `playbooks/DevWorkflow.md` for the full dev workflow (ticket → plan → implementation → PR → babysit). Summary below.
+See `playbooks/DevWorkflow.md` for the full dev workflow (ticket → plan → implementation → PR → babysit). Spawn a **background quest agent** (`run_in_background: true`). Store the returned task ID on the quest (`agent_task_id`, `agent_status: "running"`). The quest agent should:
 
 Franklin works exclusively in `~/franklin-sandbox/`. Never touch `~/Workplace/emu/` for code changes.
 
@@ -343,10 +371,10 @@ Franklin works exclusively in `~/franklin-sandbox/`. Never touch `~/Workplace/em
 3. Add upstream: `git remote add upstream git@github.com-emu:crcl-main/<repo-name>.git`
 4. `git checkout -b <ticket-key>`
 5. Set `sandbox_path` on the quest to `~/franklin-sandbox/<quest-id>`. If the quest is resuming and `sandbox_path` is already set and the directory exists, skip steps 1–4.
-6. Spawn a general-purpose Agent with the task description and the sandbox path. The agent makes changes, pushes the branch, and returns a result.
-7. Append the full agent response to the quest's sidecar log file (`state/quests/active/quest-{id}.log.json`, action: `note`). Extract PR URL if present and store it as `pr_url` on the quest. DM user with a summary.
+6. Make changes, push the branch, open the PR.
+7. Append the full result to the quest's sidecar log file (`state/quests/active/quest-{id}.log.json`, action: `note`). Extract PR URL if present and store it as `pr_url` on the quest. DM user with a summary.
 8. On quest completion or cancellation: `rm -rf ~/franklin-sandbox/<quest-id>`, set `sandbox_path` to null.
-8. Multiple repos → spawn agents in parallel (if independent) or sequentially (if dependent).
+9. Multiple repos → spawn agents in parallel (if independent) or sequentially (if dependent).
 
 ### Quest File Schema
 
@@ -390,6 +418,8 @@ Quest logs are stored in a sidecar file: `quest-{id}.log.json` (same directory a
   },
   "sandbox_path": "~/franklin-sandbox/<quest-id> or null if not a code-change quest or already cleaned up",
   "pr_url": "PR URL if applicable, null otherwise",
+  "agent_task_id": "task ID from background Agent spawn, null if not running",
+  "agent_status": "running | null",
   "outcome": "final summary when completed, null otherwise",
   "skill_updates": []
 }
@@ -410,7 +440,8 @@ When a quest yields confirmed new knowledge relevant to a skill:
 ### Step 6 — Save State
 
 Write `last_run.json` **last**, after all quest files and messages are saved:
-- `last_slack_query_ts` → `new_slack_query_ts` from Step 2
+- `last_drain_ts` → already advanced inline in Step 2.1 after each drain pass; do not overwrite here
+- `last_slack_query_ts` → `new_slack_query_ts` from Step 2 (used for channel reading cursors)
 - `last_run_completed` → ISO 8601 timestamp from Step 2
 - `scout_last_run[scout]` → update timestamp for each scout that ran this cycle
 - `notified_meetings` → prune entries older than 24 hours before writing:
@@ -432,7 +463,7 @@ Write `last_run.json` **last**, after all quest files and messages are saved:
 ## Behavioral Rules (Run Mode)
 
 1. **Follow instructions.** Run mode is execution, not discussion.
-2. **Never create quests for yourself.** Only authorized users trigger quests via self-tags.
+2. **Never create quests for yourself.** Only authorized users trigger quests via bot DM.
 3. **Never send to third parties without authorization.** Draft first in `drafts_only` mode.
 4. **Always log.** Every message sent and info received gets a log entry appended to the quest's sidecar log file (`quest-{id}.log.json`), with a permalink.
 5. **Fail gracefully.** If blocked, log it and DM the user. Don't retry blindly.

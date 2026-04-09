@@ -2,9 +2,7 @@
 
 ![Franklin](Franklin.jpg)
 
-Franklin is a personal autonomous agent that monitors Slack for tasks and executes them on your behalf. You tag yourself in a message — Franklin picks it up, proposes an approach, and gets it done.
-
-He works in two modes: **Run** (continuous loop, monitors integrations) and **Dev** (interactive, for testing and improvements).
+Franklin is a personal autonomous agent that monitors Slack, GitHub, Jira, Gmail, and your calendar — surfacing what needs attention and acting on it. DM him a task, and he figures out how to get it done.
 
 ---
 
@@ -12,152 +10,159 @@ He works in two modes: **Run** (continuous loop, monitors integrations) and **De
 
 Tasks are called **quests**. The flow is:
 
-1. Tag yourself in a Slack message (or DM Franklin directly)
-2. Franklin sees it, creates a quest, DMs you a proposed approach
+1. DM Franklin or @mention him in a channel
+2. Franklin creates a quest, DMs you a proposed approach
 3. You approve, give feedback, or cancel
 4. Franklin executes and reports back
 
-Franklin monitors Slack mentions, DMs, Jira tickets, GitHub PRs, Gmail, and your calendar — surfacing what needs attention and acting on it according to your settings.
+For simple requests (send an email, check a dashboard, answer a question), Franklin just does it — no quest needed.
 
 ---
 
-## Prerequisites
+## Architecture
 
-- [Claude Code](https://claude.ai/code) with the `/loop` skill available
-- MCP servers connected: **Slack**, **Jira**, **GitHub**, **Google Workspace**
-- A `state/settings.json` filled in (see below)
-
----
-
-## Setup
-
-```bash
-git clone git@github.com:michael-scully_crcl/franklin.git
-cd franklin
-cp state/settings.example.json state/settings.json
-# Edit state/settings.json with your info
+```
+franklin.ts (supervisor, 30-second cycles)
+  ├── server.ts (dashboard + Slack socket listener)
+  ├── Scouts (github, jira, gmail, calendar)
+  ├── filter-signals (dedup + state comparison)
+  ├── Brain (reads signals, decides what to do)
+  ├── Workers (autonomous Claude agents)
+  └── Quest agents (long-running multi-step tasks)
 ```
 
-Then open Claude Code in this directory.
+**Scouts** poll external sources on staggered intervals and write results to `state/scout_results/`.
 
-### settings.json
+**filter-signals** compares current state against previously surfaced state in SQLite, passing through only what changed.
+
+**Brain** reads the filtered signals and writes `state/delegation.json` — a list of tasks to execute.
+
+**Workers** are autonomous Claude agents that receive a task and figure out how to do it. They have access to MCP tools (Slack, GitHub, Jira, Datadog, etc.), a global skills library (`~/DevEnv/skills/`), and playbooks for complex workflows.
+
+**Quest agents** handle multi-step work: create a branch, write code, open a PR, babysit CI, and report back. See `playbooks/DevWorkflow.md`.
+
+---
+
+## Scouts
+
+| Scout | Interval | What it monitors |
+|-------|----------|------------------|
+| `github` | 10 min | Your PRs (CI, reviews), review requests, assignments, notifications |
+| `jira` | 10 min | Assigned tickets, status changes, comments |
+| `gmail` | 15 min | Unread inbox (filters out automated noise) |
+| `calendar` | 10 min | Today + tomorrow events, transcript availability |
+
+---
+
+## Workers
+
+Workers are autonomous — given a task, they decide how to execute it. They can:
+
+- Use MCP tools directly (Slack, GitHub, Jira, Datadog)
+- Invoke skills from `~/DevEnv/skills/`
+- Follow playbooks from `playbooks/`
+- Ask you for clarification via Slack DM
+- Update Franklin's own prompts and config based on your feedback
+
+See `modes/worker_wrapper.md` for the full worker prompt.
+
+---
+
+## Scheduled Tasks
+
+Recurring jobs defined in `state/scheduled_tasks.json`. The supervisor fires them on schedule — no brain involved.
 
 ```json
 {
-  "mode": "drafts_only",
-  "user_profile": {
-    "name": "Your Name",
-    "slack_user_id": "UXXXXXXXXXX",
-    "tone": "professional but not stiff, direct, friendly"
-  },
-  "authorized_users": [
-    { "name": "your-name", "slack_user_id": "UXXXXXXXXXX" }
-  ],
-  "integrations": ["slack", "jira", "github", "gws"]
+  "id": "daily-review",
+  "every": "weekdays",
+  "type": "scheduled",
+  "priority": "normal",
+  "context": { "objective": "Run daily service health review" }
 }
 ```
 
-| Setting | Values | Description |
-|---|---|---|
-| `mode` | `drafts_only` / `allow_send` | Whether Franklin drafts outbound messages or sends them directly |
-| `user_profile.name` | string | Your name |
-| `user_profile.slack_user_id` | string | Your Slack user ID |
-| `user_profile.tone` | string | How Franklin writes as you |
-| `authorized_users` | array | Who can create quests |
-| `integrations` | array | Active platforms: `slack`, `jira`, `github`, `gws` |
+Valid frequencies: `"30m"`, `"4h"`, `"7d"`, `"2w"`, `"daily"`, `"weekdays"`, `"weekly"`
 
-In `drafts_only` mode, Franklin will draft proactive outbound messages for your review. Direct commands and replies to Franklin are always sent immediately, regardless of mode.
+You can also DM Franklin to add/remove scheduled tasks.
 
 ---
 
-## Starting Franklin
+## Dashboard
 
-**Run mode** — starts the monitoring loop (2-minute cycles):
-```
-Run
-```
+`http://localhost:7070` — auto-starts with Franklin.
 
-**Dev mode** — interactive session for testing and building:
-```
-Dev
-```
+Shows: process health, socket status, scout intervals, active workers, quests, dispatch history, today's meetings, scheduled tasks.
 
-See `modes/RUN.md` and `modes/DEV.md` for the full behavioral specs.
+---
+
+## Quests
+
+Each quest is tracked in SQLite and as a JSON file in `state/quests/`. Franklin tracks:
+
+- Objective and approach
+- Every action taken (log)
+- Linked Jira ticket and PR URL
+- Outcome when complete
+
+For code changes, Franklin clones into a sandbox, makes changes, opens a PR, and babysits CI/reviews until it's green.
+
+---
+
+## Self-Improvement
+
+Franklin updates his own prompts and config based on your feedback. Tell him "always do X" or "stop doing Y" and he'll edit the relevant file (`CLAUDE.md`, `modes/brain.md`, `modes/worker_wrapper.md`, etc.) and confirm what changed. Changes are logged in `state/self_improvement_log.json`.
 
 ---
 
 ## Directory Structure
 
 ```
+franklin.ts                    # Supervisor — the main loop
+server.ts                      # Dashboard + Slack socket listener
+CLAUDE.md                      # Franklin's behavioral instructions
+modes/
+  brain.md                     # Brain prompt — signal reasoning
+  worker_wrapper.md            # Worker prompt — autonomous task execution
+  RUN.md                       # Run mode spec
+  DEV.md                       # Dev mode spec
+playbooks/
+  DevWorkflow.md               # End-to-end dev workflow
+scripts/
+  db.ts                        # SQLite schema and helpers
+  filter-signals.ts            # Dedup and state-diff
+  slack_send.ts                # Send messages/reactions as Franklin bot
+  scouts/
+    github.ts                  # GitHub scout
+    jira.ts                    # Jira scout
+    gmail.ts                   # Gmail scout
+    calendar.ts                # Calendar scout
 state/
-  settings.json          # Your personal config (gitignored)
-  settings.example.json  # Template
-  last_run.json          # Loop state
-  quests/
-    active/              # In-flight quests
-    completed/           # Done
-    archived/            # Cancelled or stale
-  dev/
-    proposals/           # Feature/improvement proposals (Dev mode)
-knowledge/               # Symlink to your knowledge base (gitignored)
-references/              # Symlink to tool usage guides (gitignored)
-integrations/            # Integration-specific specs
-playbooks/               # Process guides (e.g. dev workflow)
+  settings.json                # Personal config (gitignored)
+  scheduled_tasks.json         # Recurring task definitions
+  franklin.db                  # SQLite — quests, dispatch log, signals
+  quests/active/               # In-flight quests
+  quests/completed/            # Done
+  scout_results/               # Latest scout output
+  brain_input/                 # Filtered signals for the brain
+  worker_results/              # Worker output
+secrets/                       # Tokens (gitignored)
+knowledge/                     # Domain knowledge (symlink)
+references/                    # Tool guides (symlink)
 ```
 
-`knowledge/` and `references/` are local symlinks — point them wherever your knowledge base lives.
-
 ---
 
-## Integrations
+## Setup
 
-| Integration | What Franklin monitors |
-|---|---|
-| Slack | Mentions, DMs, @franklin tags, quest threads, ops channels |
-| Jira | Assigned tickets, status changes, sprint deadlines, stale tickets |
-| GitHub | Your PRs (CI, reviews), PRs assigned to you for review |
-| Google Workspace | Gmail inbox, calendar events, tasks |
+See [SETUP.md](SETUP.md) for the full setup guide.
 
-Scouts run on staggered intervals (2–30 min depending on urgency). See `RUN.md` for the full spec.
+Quick start:
 
----
-
-## Quests
-
-Each quest is a JSON file in `state/quests/`. Franklin tracks:
-- What needs to be done (`objective`, `approach`)
-- Every message sent and received (`log`)
-- Linked Jira ticket and PR URL
-- Outcome when complete
-
-For code changes, Franklin clones your fork into a sandbox, makes changes, opens a PR, and babysits CI/reviews.
-
----
-
-## Dev Workflow
-
-When a quest involves code changes, Franklin follows a structured end-to-end flow. The full spec is in `playbooks/DevWorkflow.md`.
-
-### Phases
-
-**1. Ticket** — Create or transition the Jira ticket to `In Progress`.
-
-**2. Plan** — A subagent explores the codebase and returns a plan plus any open questions. Franklin DMs you the questions, waits for answers, then finalizes the plan. In `drafts_only` mode, you approve the plan before implementation starts.
-
-**3. Implement** — A subagent works in an isolated sandbox (`~/franklin-sandbox/<quest-id>/`), follows the plan, and makes changes. Never touches your working directories.
-
-**4. PR** — Franklin opens a PR against upstream, self-reviews it with `analyze-pr`, posts a comment on the Jira ticket, transitions it to `In Review`, and DMs you the link.
-
-**5. Babysit** — `babysit-pr` runs autonomously: fixes CI failures, addresses review comments, resolves SonarQube issues, and notifies reviewers when ready. Franklin DMs you when the PR is mergeable.
-
-**6. Cleanup** — Sandbox directory is deleted. Quest moves to `completed/`.
-
-### Clarification Rule
-
-At any phase, if a decision is ambiguous enough to meaningfully change the approach, Franklin pauses and DMs you rather than guessing. Questions during planning are preferred — mid-implementation interruptions are more disruptive, but always better than a wrong assumption.
-
----
-
-## Self-Improvement
-
-When Franklin spots a gap in its own instructions, it drafts a proposed change to `CLAUDE.md` and DMs you. You approve or reject. Changes are logged in `state/self_improvement_log.json`.
+```bash
+npm install
+cp state/settings.example.json state/settings.json
+# Edit settings.json with your info
+# Add Slack tokens to secrets/
+npx tsx franklin.ts
+```

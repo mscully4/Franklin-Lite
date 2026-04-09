@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Franklin</title>
+  <link rel="icon" type="image/png" href="/avatar.png">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --blue: #58a6ff;
+      --purple: #bc8cff;
+      --orange: #f0883e;
+      --cyan: #39d2c0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; }
+    header h1 img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); }
+    #refresh { font-size: 11px; color: var(--muted); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 240px 1fr 280px;
+      gap: 1px;
+      background: var(--border);
+      min-height: calc(100vh - 41px);
+    }
+    .col { background: var(--surface); padding: 14px 16px; overflow-y: auto; }
+
+    .section-title {
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .section + .section { margin-top: 20px; }
+
+    .status-line { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot-green { background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .dot-red { background: var(--red); }
+    .dot-yellow { background: var(--yellow); }
+    .kv { margin-bottom: 4px; }
+    .kv-label { color: var(--muted); }
+    .kv-value { color: var(--text); }
+
+    .tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+    .tag-green { background: rgba(63,185,80,.15); color: var(--green); }
+    .tag-red { background: rgba(248,81,73,.15); color: var(--red); }
+    .tag-yellow { background: rgba(210,153,34,.15); color: var(--yellow); }
+    .tag-blue { background: rgba(88,166,255,.15); color: var(--blue); }
+    .tag-purple { background: rgba(188,140,255,.15); color: var(--purple); }
+    .tag-cyan { background: rgba(57,210,192,.15); color: var(--cyan); }
+    .tag-orange { background: rgba(240,136,62,.15); color: var(--orange); }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .row:last-child { border-bottom: none; }
+
+    .quest-card {
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .quest-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 10px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .quest-id { color: var(--purple); font-weight: 600; }
+    .quest-age { color: var(--muted); font-size: 11px; }
+    .quest-obj { padding: 7px 10px; font-size: 12px; color: var(--text); }
+    .quest-logs { padding: 0 10px 7px; }
+    .log-entry {
+      padding: 3px 0;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .log-ago { color: var(--muted); margin-right: 5px; }
+    .log-action { color: var(--orange); margin-right: 5px; }
+
+    .dispatch-row {
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .dispatch-row:last-child { border-bottom: none; }
+    .dispatch-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .dispatch-summary {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .side-row {
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .side-row:last-child { border-bottom: none; }
+    .side-muted { color: var(--muted); font-size: 11px; margin-top: 1px; }
+
+    .empty { color: var(--muted); font-style: italic; font-size: 12px; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    @keyframes fadein { from { opacity: 0.4; } to { opacity: 1; } }
+    .flash { animation: fadein 0.4s ease; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><img src="/avatar.png" alt="Franklin">Franklin</h1>
+    <div id="refresh">loading...</div>
+  </header>
+
+  <div class="layout">
+    <div class="col" id="col-left"></div>
+    <div class="col" id="col-main"></div>
+    <div class="col" id="col-right"></div>
+  </div>
+
+  <script>
+    function esc(s) {
+      return String(s ?? '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function timeAgoClient(iso) {
+      if (!iso) return 'never';
+      const s = (Date.now() - new Date(iso).getTime()) / 1000;
+      if (s < 60) return `${Math.floor(s)}s ago`;
+      if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+      return `${Math.floor(s / 86400)}d ago`;
+    }
+
+    const STATUS_TAG = {
+      ok:         'tag-green',
+      skipped:    'tag-blue',
+      error:      'tag-red',
+      timeout:    'tag-red',
+      no_worker:  'tag-yellow',
+      needs_info: 'tag-cyan',
+    };
+
+    function renderLeft(d) {
+      // Process status
+      const processDot = d.running
+        ? `<span class="dot dot-green"></span><span style="color:var(--green)">RUNNING</span>`
+        : `<span class="dot dot-red"></span><span style="color:var(--red)">STOPPED</span>`;
+
+      // Socket status
+      const socketOk = d.socketStatus === 'connected' && !d.socketStale;
+      const socketDot = socketOk
+        ? `<span class="dot dot-green"></span><span style="color:var(--green)">connected</span>`
+        : `<span class="dot dot-red"></span><span style="color:var(--red)">${esc(d.socketStatus)}</span>`;
+
+      // Scouts
+      const scouts = d.scouts.map(s => `
+        <div class="row">
+          <span style="color:var(--blue);font-size:12px">${s.name}</span>
+          <span style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <span style="color:var(--muted);font-size:11px">${s.lastAgo}</span>
+            <span class="tag ${s.overdue ? 'tag-yellow' : 'tag-green'}">${s.overdue ? 'overdue' : 'ok'}</span>
+          </span>
+        </div>
+      `).join('');
+
+      // Active workers
+      const workerRows = d.activeWorkers.length
+        ? d.activeWorkers.map(w => `
+          <div class="row">
+            <span style="color:var(--orange)">${esc(w.type)}</span>
+            <span style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+              <span style="color:var(--muted);font-size:11px">${esc(w.task_id)}</span>
+              <span style="color:var(--muted);font-size:11px">${esc(w.startedAgo)}</span>
+            </span>
+          </div>
+        `).join('')
+        : `<div class="empty">idle</div>`;
+
+      document.getElementById('col-left').innerHTML = `
+        <div class="section">
+          <div class="section-title">Process</div>
+          <div class="status-line">${processDot}</div>
+          <div class="kv"><span class="kv-label">heartbeat </span><span class="kv-value">${d.heartbeatAgo}</span></div>
+          <div class="kv"><span class="kv-label">last cycle </span><span class="kv-value">${d.lastCycleAgo}</span></div>
+        </div>
+        <div class="section">
+          <div class="section-title">Socket</div>
+          <div class="status-line">${socketDot}</div>
+          <div class="kv"><span class="kv-label">updated </span><span class="kv-value">${d.socketAgo}</span></div>
+          <div class="kv"><span class="kv-label">inbox </span><span class="kv-value">${d.slackInboxPending} pending</span></div>
+        </div>
+        <div class="section">
+          <div class="section-title">Scouts</div>
+          ${scouts}
+        </div>
+        <div class="section">
+          <div class="section-title">Workers${d.activeWorkers.length ? ` <span class="tag tag-green">${d.activeWorkers.length} active</span>` : ''}</div>
+          ${workerRows}
+        </div>
+      `;
+    }
+
+    function renderMain(d) {
+      // Active quests
+      const questCards = d.activeQuests.map(q => {
+        const tags = [
+          q.agentStatus === 'running' ? `<span class="tag tag-green">running</span>` : '',
+          `<span class="tag tag-purple">${esc(q.status)}</span>`,
+          q.prUrl ? `<a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '',
+        ].filter(Boolean).join(' ');
+
+        const logs = q.recentLogs.map(l => `
+          <div class="log-entry">
+            <span class="log-ago">${l.ago}</span>
+            <span class="log-action">[${esc(l.action)}]</span>
+            <span>${esc(l.summary)}</span>
+          </div>
+        `).join('');
+
+        return `
+          <div class="quest-card">
+            <div class="quest-head">
+              <span><span class="quest-id">${esc(q.id)}</span> <span class="quest-age">${q.createdAgo}</span></span>
+              <span>${tags}</span>
+            </div>
+            <div class="quest-obj">${esc(q.objective)}</div>
+            ${logs ? `<div class="quest-logs">${logs}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      // Recent dispatches
+      const dispatchRows = (d.recentDispatches ?? []).slice(0, 15).map(r => {
+        const cls = STATUS_TAG[r.status] ?? 'tag-blue';
+        return `
+          <div class="dispatch-row">
+            <div class="dispatch-header">
+              <span>
+                <span style="color:var(--orange)">${esc(r.type)}</span>
+                <span style="color:var(--muted);font-size:11px;margin-left:6px">${esc(r.task_id)}</span>
+              </span>
+              <span style="display:flex;align-items:center;gap:6px">
+                <span class="tag ${cls}">${esc(r.status)}</span>
+                <span style="color:var(--muted);font-size:11px">${esc(r.completedAgo)}</span>
+              </span>
+            </div>
+            ${r.summary ? `<div class="dispatch-summary">${esc(r.summary)}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('col-main').innerHTML = `
+        <div class="section">
+          <div class="section-title">Active Quests</div>
+          ${questCards || '<div class="empty">No active quests</div>'}
+        </div>
+        <div class="section">
+          <div class="section-title">Recent Dispatches</div>
+          ${dispatchRows || '<div class="empty">No recent dispatches</div>'}
+        </div>
+      `;
+    }
+
+    function renderRight(d) {
+      // Meetings
+      const meetings = (d.meetings ?? []).map(m => {
+        const start = new Date(m.start);
+        const end = new Date(m.end);
+        const now = Date.now();
+        const inProgress = now >= start.getTime() && now <= end.getTime();
+        const time = start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const transcriptTag = m.transcript_available ? ' <span class="tag tag-cyan">transcript</span>' : '';
+        const statusTag = inProgress
+          ? '<span class="tag tag-green" style="margin-left:6px">now</span>'
+          : m.notified ? ' <span class="tag tag-green">notified</span>' : '';
+        const titleHtml = m.meetingUrl
+          ? `<a href="${esc(m.meetingUrl)}" target="_blank">${esc(m.title)}</a>`
+          : esc(m.title);
+        return `
+          <div class="side-row">
+            <span style="color:var(--yellow);font-weight:600;margin-right:8px;white-space:nowrap">${time}</span> ${titleHtml}${statusTag}${transcriptTag}
+            ${m.location && !m.meetingUrl ? `<div class="side-muted">${esc(m.location)}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      // Scheduled tasks
+      const scheduledRows = (d.scheduledTasks ?? []).map(t => `
+        <div class="side-row">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="color:var(--cyan);font-weight:600">${esc(t.id)}</span>
+            <span class="tag tag-purple">${esc(t.every)}</span>
+          </div>
+          <div class="side-muted">${esc(t.objective)}</div>
+          <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
+        </div>
+      `).join('');
+
+      // Completed quests
+      const completed = d.completedQuests.map(q => `
+        <div class="side-row">
+          <span style="color:var(--purple)">${esc(q.id)}</span>
+          <span style="color:var(--muted);font-size:11px"> ${q.updatedAgo}</span>
+          <div class="side-muted">${esc(q.objective)}</div>
+        </div>
+      `).join('');
+
+      document.getElementById('col-right').innerHTML = `
+        <div class="section">
+          <div class="section-title">Meetings</div>
+          ${meetings || '<div class="empty">None upcoming</div>'}
+        </div>
+        <div class="section">
+          <div class="section-title">Scheduled Tasks</div>
+          ${scheduledRows || '<div class="empty">None configured</div>'}
+        </div>
+        <div class="section">
+          <div class="section-title">Recently Completed</div>
+          ${completed || '<div class="empty">None</div>'}
+        </div>
+      `;
+    }
+
+    async function refresh() {
+      const el = document.getElementById('refresh');
+      try {
+        const data = await fetch('/api/state').then(r => r.json());
+        renderLeft(data);
+        renderMain(data);
+        renderRight(data);
+        el.textContent = `updated ${new Date().toLocaleTimeString()}`;
+        document.querySelector('.layout').classList.add('flash');
+        setTimeout(() => document.querySelector('.layout').classList.remove('flash'), 400);
+      } catch {
+        el.textContent = 'error -- retrying...';
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>

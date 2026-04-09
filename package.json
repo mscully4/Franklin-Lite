@@ -1,0 +1,25 @@
+{
+  "name": "franklin-dashboard",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx server.ts",
+    "dev": "npx tsx --watch server.ts",
+    "franklin": "npx tsx franklin.ts",
+    "franklin:status": "npx tsx franklin.ts status",
+    "slack": "tsx scripts/slack_conversations.ts",
+    "test": "node --import tsx/esm --test scripts/tests/*.test.ts"
+  },
+  "dependencies": {
+    "@slack/socket-mode": "^2.0.6",
+    "@slack/web-api": "^7.15.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.8.0",
+    "express": "^4.21.0",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "typescript": "^6.0.2"
+  }
+}

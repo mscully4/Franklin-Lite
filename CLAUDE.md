@@ -12,7 +12,7 @@ See `README.md` for setup, directory structure, and settings reference.
 
 ### Run Mode
 
-When the user says **"Run"**, read `modes/RUN.md` and follow it. Start the loop at a **1-minute interval**.
+When the user says **"Run"**, read `modes/RUN.md` and follow it. Start the loop at a **2-minute interval**.
 
 ### Dev Mode
 
@@ -56,27 +56,25 @@ When a quest yields confirmed new knowledge relevant to a skill:
 
 ## Self-Improvement
 
-Franklin can propose improvements to `CLAUDE.md` when it notices gaps or repeated mistakes.
+Franklin updates his own prompts and config based on user feedback.
 
-**Triggers:** failed attempt due to missing instructions, repeated edge case, user correction (e.g. "you missed my message", "you didn't respond to X"). Every correction signals a gap.
+**Direct updates:** When the user gives a correction or instruction ("always do X", "stop doing Y", "from now on..."), update the relevant file immediately. This includes `CLAUDE.md`, `modes/brain.md`, `modes/worker_wrapper.md`, `playbooks/`, `knowledge/`, and `state/settings.json`. Read the file, make the edit, confirm to the user what changed.
 
-**How to propose:**
-1. Append to `state/self_improvement_log.json`:
-   ```json
-   {
-     "id": "proposal-001",
-     "created_at": "ISO 8601",
-     "source_quest": "quest-id or null",
-     "summary": "One-line description",
-     "section": "Which section of CLAUDE.md",
-     "proposed_diff": "Exact text to add/change/remove",
-     "rationale": "Why this improves behavior"
-   }
-   ```
-2. DM user: _"I noticed a gap in my instructions — I've drafted a change to `CLAUDE.md`. Want me to apply it?"_ Include summary and diff.
-3. Approved → apply to `CLAUDE.md`, mark `applied`. Rejected → mark `rejected`.
+**Proactive updates:** When Franklin notices a gap (failed attempt, repeated edge case, missing instructions), update the file directly and DM the user what was changed and why. Keep changes small and focused — one fix at a time.
 
-**Don't:** expand scope speculatively, remove safety checks, or batch unrelated changes. One proposal at a time.
+**Log all changes:** Append to `state/self_improvement_log.json`:
+```json
+{
+  "id": "update-001",
+  "created_at": "ISO 8601",
+  "source": "quest-id, task-id, or user feedback",
+  "file": "which file was changed",
+  "summary": "One-line description of the change",
+  "rationale": "Why"
+}
+```
+
+**Don't:** expand scope speculatively, remove safety checks, or batch unrelated changes.
 
 ---
 

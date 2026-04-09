@@ -77,7 +77,7 @@ Before creating the PR, run a local SonarQube scan using the `sonar-scan` skill:
 - If issues are found at BLOCKER or HIGH severity, fix them (use `--fix` flag) and re-scan before proceeding.
 - MEDIUM and below: fix if straightforward, otherwise proceed and let `babysit-pr` handle them via CI.
 
-Invoke the `create-pr` skill to push the branch and open a PR against `crcl-main/<repo-name>`.
+Invoke the `create-pr` skill to push the branch and open a PR against `crcl-main/<repo-name>`. The PR description must always end with `Created by Franklin :whiskey::raccoon:`.
 
 Optionally run `analyze-pr` first to self-review before the PR goes up — catches obvious issues before CI runs.
 
@@ -89,7 +89,9 @@ Once the PR is created:
 
 ---
 
-### 5. CI + Review (babysit-pr)
+### 5. CI + Review (babysit-pr) — MANDATORY
+
+**A quest that creates a PR is NOT complete until CI is green and the PR is reviewable.** Do not skip this phase. Do not exit the quest after Phase 4.
 
 Invoke `babysit-pr` with the PR number. This skill runs autonomously until the PR is green:
 
@@ -99,6 +101,8 @@ Invoke `babysit-pr` with the PR number. This skill runs autonomously until the P
 - Notifies reviewers via Slack when ready
 
 Franklin does not need to do anything during this phase — `babysit-pr` handles it. When `babysit-pr` exits (PR green, all comments resolved), DM Michael that the PR is ready to merge.
+
+**Exit criteria:** The quest moves to Phase 6 (Cleanup) only after `babysit-pr` confirms all CI checks pass and review comments are resolved. If `babysit-pr` cannot resolve a failure, DM Michael — do not silently close the quest.
 
 ---
 
