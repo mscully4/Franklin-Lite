@@ -405,7 +405,22 @@ function spawnWithTimeout(
   });
 }
 
-async function runQuestAgent(task: DelegationTask): Promise<WorkerResult | null> {
+const QUEST_TIMEOUT_MS = 60 * 60_000; // 60 min
+
+// Track running quest agent processes so the reaper can check on them
+interface QuestProcess {
+  questId: string;
+  taskId: string;
+  pid: number;
+  startedAt: string;
+}
+const runningQuests: Map<string, QuestProcess> = new Map();
+
+/**
+ * Spawn a quest agent as a background process. Returns immediately — the
+ * reaper (running each cycle) handles finalization when the agent completes.
+ */
+function spawnQuestAgent(task: DelegationTask): WorkerResult {
   const dispatchedAt = new Date().toISOString();
   const ctx = task.context;
 
@@ -452,54 +467,36 @@ async function runQuestAgent(task: DelegationTask): Promise<WorkerResult | null>
   });
   questDb.close();
 
-  console.log(`[franklin] Created ${questId} — spawning quest agent...`);
+  console.log(`[franklin] Created ${questId} — spawning quest agent (fire-and-forget)...`);
 
   const agentStatusFile = join(activeDir, `${questId}.agent.json`);
   writeJson(agentStatusFile, { status: "running", started_at: dispatchedAt, completed_at: null, result: null, error: null });
 
-  const { exitCode, timedOut } = await spawnWithTimeout(
+  // Spawn detached — don't block the cycle
+  const child = spawn("claude",
     ["--dangerously-skip-permissions", "--print", "-p",
       `You are Franklin. Read state/quests/active/${questId}.json and execute the quest objective to completion. When done, write state/quests/active/${questId}.agent.json with status "completed" and a result summary.`],
-    WORKER_TIMEOUT_MS * 6, // quests get 60 min
+    { cwd: ROOT, stdio: "inherit", detached: false },
   );
 
-  const completedAt = new Date().toISOString();
-  const agentStatus = readJson<{ status: string; result: unknown }>(agentStatusFile);
+  const pid = child.pid ?? 0;
+  runningQuests.set(questId, { questId, taskId: task.id, pid, startedAt: dispatchedAt });
 
-  // Quest agents sometimes write result as an object — normalize to string for DB storage
-  const rawResult = agentStatus?.result;
-  const outcomeStr = rawResult == null ? null : typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult);
+  // When the process exits, remove from tracking (reaper handles finalization)
+  child.on("close", () => {
+    runningQuests.delete(questId);
+  });
 
-  const finalStatus = timedOut ? "timeout" : exitCode === 0 ? "ok" : "error";
-  const questFinalStatus = timedOut ? "failed" : exitCode === 0 ? "completed" : "failed";
-
-  // Update DB — wrap in try/catch so a DB error doesn't crash the cycle
-  try {
-    const questDb2 = openDb();
-    questDb2.updateQuestStatus(questId, questFinalStatus, {
-      agent_status: finalStatus === "ok" ? "completed" : "failed",
-      outcome: outcomeStr ?? (timedOut ? "timed out" : undefined),
-    });
-    questDb2.close();
-  } catch (err) {
-    console.error(`[franklin] Failed to update quest DB for ${questId}:`, err);
-  }
-
-  try {
-    appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
-      dispatched_at: dispatchedAt, completed_at: completedAt,
-      status: finalStatus,
-      summary: outcomeStr ?? (timedOut ? "quest agent timed out" : null) });
-  } catch (err) {
-    console.error(`[franklin] Failed to write dispatch log for ${task.id}:`, err);
-  }
+  appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
+    dispatched_at: dispatchedAt, completed_at: dispatchedAt,
+    status: "ok", summary: `Spawned quest ${questId} (PID ${pid})` });
 
   return {
     task_id: task.id,
-    status: timedOut ? "error" : exitCode === 0 ? "ok" : "error",
-    completed_at: completedAt,
-    summary: outcomeStr ?? `Quest ${questId} ${timedOut ? "timed out" : "completed"}`,
-    error: timedOut ? "timed out" : null,
+    status: "ok",
+    completed_at: dispatchedAt,
+    summary: `Spawned quest ${questId}`,
+    error: null,
   };
 }
 
@@ -549,8 +546,8 @@ async function runWorker(task: DelegationTask): Promise<WorkerResult | null> {
   // Script tasks run shell commands directly — no LLM
   if (task.kind === "script") return runScriptTask(task);
 
-  // Quest tasks get their own long-running agent, not a worker
-  if (task.type === "quest") return runQuestAgent(task);
+  // Quest tasks spawn a background agent — don't block the cycle
+  if (task.type === "quest") return spawnQuestAgent(task);
 
   console.log(`[franklin] Spawning ${task.type} worker for ${task.id}...`);
   mkdirSync(WORKER_RESULTS_DIR, { recursive: true });
@@ -670,7 +667,7 @@ async function runCycle(startedAt: string): Promise<void> {
   // filter-signals always runs (drains slack inbox each cycle)
   runFilterSignals();
 
-  // Reap stale quests — if agent file says completed/failed but quest is still active, fix it
+  // Check in on quests — finalize completed ones, enforce timeouts
   try {
     const activeDir = join("state", "quests", "active");
     const completedDir = join("state", "quests", "completed");
@@ -678,17 +675,38 @@ async function runCycle(startedAt: string): Promise<void> {
     for (const qf of questFiles) {
       const quest = readJson<Record<string, unknown>>(join(activeDir, qf));
       if (!quest || quest.status !== "active") continue;
+      const qid = qf.replace(".json", "");
       const agentFile = join(activeDir, qf.replace(".json", ".agent.json"));
-      const agent = readJson<{ status?: string; result?: unknown }>(agentFile);
+      const agent = readJson<{ status?: string; result?: unknown; started_at?: string }>(agentFile);
+
+      // Check for timeout — kill the process if it's been running too long
+      const tracked = runningQuests.get(qid);
+      if (tracked && agent?.status === "running" && agent.started_at) {
+        const elapsed = Date.now() - new Date(agent.started_at).getTime();
+        if (elapsed > QUEST_TIMEOUT_MS) {
+          console.error(`[franklin] Quest ${qid} timed out after ${Math.round(elapsed / 60_000)}m — killing PID ${tracked.pid}`);
+          try { process.kill(tracked.pid, "SIGTERM"); } catch { /* already dead */ }
+          setTimeout(() => { try { process.kill(tracked.pid, "SIGKILL"); } catch { /* ok */ } }, 5_000);
+          // Write agent status so next reap cycle finalizes it
+          writeJson(agentFile, { ...agent, status: "failed", completed_at: new Date().toISOString(), result: null, error: "timed out" });
+          runningQuests.delete(qid);
+        } else {
+          const mins = Math.round(elapsed / 60_000);
+          if (mins > 0 && mins % 10 === 0) console.log(`[franklin] Quest ${qid} still running (${mins}m elapsed)`);
+        }
+        continue; // still running or just killed — finalize next cycle
+      }
+
+      // Finalize completed/failed quests
       if (agent && (agent.status === "completed" || agent.status === "failed")) {
-        const qid = qf.replace(".json", "");
         const rawResult = agent.result;
         const outcome = rawResult == null ? null : typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult);
         const finalStatus = agent.status === "completed" ? "completed" : "failed";
-        console.log(`[franklin] Reaping stale quest ${qid} (agent=${agent.status})`);
+        console.log(`[franklin] Finalizing quest ${qid} (agent=${agent.status})`);
         quest.status = finalStatus;
         quest.agent_status = finalStatus;
-        quest.outcome = outcome ?? `Reaped: agent ${agent.status}`;
+        quest.outcome = outcome ?? `agent ${agent.status}`;
+        quest.updated_at = new Date().toISOString();
         writeJson(join(activeDir, qf), quest);
         // Move to completed
         for (const suffix of [".json", ".agent.json", ".log.json"]) {
@@ -701,11 +719,19 @@ async function runCycle(startedAt: string): Promise<void> {
           const reapDb = openDb();
           reapDb.updateQuestStatus(qid, finalStatus, { agent_status: finalStatus, outcome: outcome ?? undefined });
           reapDb.close();
-        } catch (err) { console.error(`[franklin] Failed to update DB for reaped quest ${qid}:`, err); }
+        } catch (err) { console.error(`[franklin] Failed to update DB for quest ${qid}:`, err); }
+        // Dispatch log
+        try {
+          appendDispatchLog({ task_id: tracked?.taskId ?? qid, type: "quest", priority: "normal",
+            dispatched_at: agent.started_at ?? quest.created_at as string, completed_at: new Date().toISOString(),
+            status: finalStatus === "completed" ? "ok" : "error",
+            summary: outcome ?? `Quest ${qid} ${finalStatus}` });
+        } catch (err) { console.error(`[franklin] Failed to log quest ${qid}:`, err); }
+        runningQuests.delete(qid);
       }
     }
   } catch (err) {
-    console.error("[franklin] Quest reaper error:", err);
+    console.error("[franklin] Quest check-in error:", err);
   }
 
   // Generate deterministic tasks
