@@ -17,12 +17,13 @@ The world comes to you as pre-filtered input. You read, reason, and delegate.
 Read all of these. Missing files are not errors — treat as empty.
 
 ```
-state/brain_input/signals.json      changed stateful signals (github, jira, gmail)
-state/brain_input/slack_inbox.json  unprocessed Slack inbox events
-state/settings.json                 user identity, authorized_users
-state/slack_socket.json             socket mode health
-state/last_run.json                 timestamps from last cycle
-state/quests/active/quest-*.json    active quest files (not *.log.json)
+state/brain_input/signals.json          changed stateful signals (github, jira, gmail)
+state/brain_input/slack_inbox.json      unprocessed Slack inbox events
+state/brain_input/inflight_prs.json     PRs with active workers (array of signal_ids)
+state/settings.json                     user identity, authorized_users
+state/slack_socket.json                 socket mode health
+state/last_run.json                     timestamps from last cycle
+state/quests/active/quest-*.json        active quest files (not *.log.json)
 ```
 
 ---
@@ -79,41 +80,46 @@ An array of raw Slack events, already drained and deduplicated. Every event here
 
 For each signal with `source: "github"`:
 
-The `current_state` now includes:
+### Step 4a — Deduplication check
+
+**Before doing anything**, check `state/brain_input/inflight_prs.json`. This is an array of signal_ids (e.g. `["github:pr:crcl-main/repo/123"]`) where a worker is already active. If the signal's `id` is in this list, **skip it entirely** — do not emit any task. A worker is already on it.
+
+### Step 4b — Evaluate state
+
+The `current_state` includes:
 - `ci_failing` — array of failing check names
 - `changes_requested` — array of reviewers who requested changes
 - `approved` — boolean
 - `mergeable_state` — `"clean"`, `"behind"`, `"dirty"`, `"blocked"`, or `"unknown"`
 - `review_comments` — count of inline review comments
 
-### Merge state actions
+### Step 4c — Proactive action rules
 
-If `mergeable_state` is `"behind"` (branch just needs a rebase, no conflicts):
-- Emit a **script task** — this is a deterministic fix, no LLM needed:
-  ```json
-  {
-    "type": "pr_monitor",
-    "kind": "script",
-    "command": "gh pr update-branch --repo <repo> <number>",
-    "context": { "signal_id": "...", "repo": "...", "number": ..., "reason": "branch behind base" }
-  }
-  ```
-- Do NOT also emit a worker task for the same PR in this cycle.
+Franklin proactively manages authored PRs to keep them in a reviewable state. **Act without waiting for the user to ask.** Generate exactly one task per PR based on the highest-priority issue:
 
-If `mergeable_state` is `"dirty"` (merge conflict):
-- Emit a normal `pr_monitor` worker task. The worker needs to check out the code and resolve the conflict.
+**Priority order** (handle the first match):
 
-### Standard pr_monitor rules
+1. **Branch behind** (`mergeable_state === "behind"`): emit a **script task** to rebase. CI may pass after the rebase, so don't also fix CI in the same cycle.
+   ```json
+   { "type": "pr_monitor", "kind": "script", "command": "gh pr update-branch --repo <repo> <number>", "context": { "signal_id": "...", "repo": "...", "number": ..., "reason": "branch behind base" } }
+   ```
 
-Generate a `pr_monitor` (worker) task if:
-- `current_state.ci_failing` is non-empty, OR
-- `current_state.changes_requested` is non-empty, OR
-- `current_state.review_comments` increased (new inline comments to address), OR
-- `current_state.approved === true` AND `current_state.ci_failing` is empty AND `current_state.mergeable_state` is `"clean"`
+2. **Merge conflict** (`mergeable_state === "dirty"`): emit a **worker task**. The worker needs to clone, resolve the conflict, and push.
 
-A PR with no failures, no changes requested, no new comments, and not approved needs no action — skip it even if the state technically changed (e.g. head SHA rotated).
+3. **CI failing** (`ci_failing` is non-empty): emit a **worker task**. The worker should use the `babysit-pr` skill to analyze failures and push fixes.
 
-One task per PR. If a PR is both `behind` and has `ci_failing`, prefer the script rebase first — CI may pass after the rebase.
+4. **Review feedback** (`changes_requested` is non-empty OR `review_comments` increased vs `previous_state`): emit a **worker task**. The worker should read all review comments, address them, commit, and push.
+
+5. **Approved and ready** (`approved === true` AND `ci_failing` is empty AND `mergeable_state === "clean"`): emit a **worker task** that **DMs the user** that the PR is ready to merge. **Never auto-merge.** Merging requires human approval.
+
+6. **No action needed**: emit a **no-op script task** to advance `mark_surfaced` so the signal doesn't re-fire:
+   ```json
+   { "type": "pr_monitor", "kind": "script", "command": "echo 'no action needed'", "context": { "signal_id": "...", "reason": "no action needed" }, "mark_surfaced": { "id": "...", "state": { ...current_state... } } }
+   ```
+
+**Worker task objective framing:** Be explicit about what the worker should do. Example: `"Get PR #656 (crcl-main/credits-manager) back to a reviewable state. Fix CI failures: [lint, test]. Address 3 new review comments."` Not just "monitor PR."
+
+One task per PR. Never emit both a script and worker task for the same PR in one cycle.
 
 ---
 
@@ -213,7 +219,7 @@ Task IDs are sequential within this run: `task-001`, `task-002`, etc.
 
 ### pr_monitor context
 
-For worker tasks (default):
+For worker tasks — include an explicit objective and the Jira key (from `entry.raw.jira_key`, null if not found):
 ```json
 {
   "signal_id": "github:pr:crcl-main/wallets-api/3077",
@@ -221,6 +227,8 @@ For worker tasks (default):
   "number": 3077,
   "title": "DEV-6307: migrate auth tests",
   "url": "https://github.com/crcl-main/wallets-api/pull/3077",
+  "jira_key": "DEV-6307",
+  "objective": "Get PR #3077 back to a reviewable state. Fix CI failures: [lint]. Address 2 new review comments.",
   "ci_failing": ["lint"],
   "changes_requested": [],
   "approved": false,
@@ -245,9 +253,23 @@ For script tasks (branch behind):
 }
 ```
 
+For ready-to-merge notifications:
+```json
+{
+  "signal_id": "github:pr:crcl-main/wallets-api/3077",
+  "repo": "crcl-main/wallets-api",
+  "number": 3077,
+  "title": "DEV-6307: migrate auth tests",
+  "url": "https://github.com/crcl-main/wallets-api/pull/3077",
+  "objective": "DM Michael that PR #3077 is approved, CI green, and ready to merge.",
+  "approved": true,
+  "dm_channel": "D09TPK162SD"
+}
+```
+
 `dm_channel`: use `settings.json` `user_profile.slack_dm_channel` if set, otherwise fall back to `authorized_users[0].slack_user_id`.
 
-`mark_surfaced`:
+`mark_surfaced` — always set on every pr_monitor task (including no-ops):
 ```json
 {
   "id": "github:pr:crcl-main/wallets-api/3077",

@@ -9,6 +9,7 @@ import { openDb } from "./scripts/db.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE = join(__dirname, "state");
 const PORT = 7070;
+const GITHUB_ORG = "crcl-main";
 
 const app = express();
 const db = openDb();
@@ -135,6 +136,43 @@ app.get("/api/state", (_req, res) => {
   const scheduledTasks = (readJSON<Array<{ id: string; every: string; kind?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
     .map((t) => ({ id: t.id, every: t.every, kind: t.kind ?? "worker", objective: t.context?.objective ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
 
+  // Open PRs from GitHub scout
+  interface GhScoutEntry { id: string; type: string; title: string; url: string; repo: string; number: number; updated_at: string; raw: Record<string, unknown> }
+  const githubScout = readJSON<{ entries?: GhScoutEntry[] }>(join(STATE, "scout_results", "github.json"));
+  const openPrs = (githubScout?.entries ?? [])
+    .filter((e) => e.type === "pr_authored")
+    .map((e) => {
+      const r = e.raw;
+      const ciFailing = (r.ci_failing as string[]) ?? [];
+      const mergeableState = (r.mergeable_state as string) ?? "unknown";
+      const reviewComments = (r.review_comments as number) ?? 0;
+      const approved = (r.approved as boolean) ?? false;
+      const changesRequested = (r.changes_requested as string[]) ?? [];
+      // Determine status label
+      let status = "ok";
+      if (ciFailing.length > 0) status = "ci_failing";
+      else if (mergeableState === "dirty") status = "conflict";
+      else if (mergeableState === "behind") status = "behind";
+      else if (changesRequested.length > 0) status = "changes_requested";
+      else if (approved && mergeableState === "clean") status = "ready";
+      else if (mergeableState === "blocked") status = "blocked";
+      return {
+        repo: e.repo.replace(`${GITHUB_ORG}/`, ""),
+        number: e.number,
+        title: e.title,
+        url: e.url,
+        status,
+        ciFailing,
+        reviewComments,
+        approved,
+        mergeableState,
+        updatedAgo: timeAgo(e.updated_at),
+      };
+    });
+
+  // Inflight PRs
+  const inflightPrs = db.getInflightPrs().map((p) => p.signal_id);
+
   // Inbox stats from DB
   const pending = db.getPendingSlackEvents().length;
 
@@ -152,6 +190,8 @@ app.get("/api/state", (_req, res) => {
     completedQuests,
     meetings,
     scheduledTasks,
+    openPrs,
+    inflightPrs,
     slackInboxPending: pending,
     serverTime: new Date().toISOString(),
   });

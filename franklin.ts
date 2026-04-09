@@ -500,6 +500,62 @@ function spawnQuestAgent(task: DelegationTask): WorkerResult {
   };
 }
 
+const INFLIGHT_TTL_MS = QUEST_TIMEOUT_MS; // same as quest timeout (60 min)
+const INFLIGHT_PRS_FILE = join(ROOT, "state", "brain_input", "inflight_prs.json");
+
+/**
+ * Prune stale entries and write the inflight PRs snapshot for the brain.
+ * Called each cycle before the brain runs.
+ */
+function writeInflightPrs(): void {
+  const inflightDb = openDb();
+  const entries = inflightDb.getInflightPrs();
+  const now = Date.now();
+  const live: string[] = [];
+
+  for (const entry of entries) {
+    // Prune if TTL expired
+    const age = now - new Date(entry.started_at).getTime();
+    if (age > INFLIGHT_TTL_MS) {
+      console.log(`[franklin] Pruning expired inflight PR: ${entry.signal_id} (${Math.round(age / 60_000)}m old)`);
+      inflightDb.removeInflightPr(entry.signal_id);
+      continue;
+    }
+    // Prune if PID is dead
+    if (entry.pid) {
+      try { process.kill(entry.pid, 0); } catch {
+        console.log(`[franklin] Pruning dead inflight PR: ${entry.signal_id} (PID ${entry.pid} dead)`);
+        inflightDb.removeInflightPr(entry.signal_id);
+        continue;
+      }
+    }
+    live.push(entry.signal_id);
+  }
+
+  // Also include PRs from active quests that have a pr_url
+  const activeDir = join(ROOT, "state", "quests", "active");
+  try {
+    const questFiles = readdirSync(activeDir).filter((f: string) => f.match(/^quest-\d+\.json$/) && !f.includes("agent") && !f.includes("log"));
+    for (const qf of questFiles) {
+      const quest = readJson<Record<string, unknown>>(join(activeDir, qf));
+      if (!quest || quest.status !== "active") continue;
+      const prUrl = quest.pr_url as string | null;
+      if (prUrl) {
+        // Extract signal_id from PR URL: https://github.com/crcl-main/repo/pull/123 → github:pr:crcl-main/repo/123
+        const match = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+        if (match) {
+          const signalId = `github:pr:${match[1]}/${match[2]}`;
+          if (!live.includes(signalId)) live.push(signalId);
+        }
+      }
+    }
+  } catch { /* active dir may not exist yet */ }
+
+  inflightDb.close();
+  mkdirSync(join(ROOT, "state", "brain_input"), { recursive: true });
+  writeJson(INFLIGHT_PRS_FILE, live);
+}
+
 function runScriptTask(task: DelegationTask): WorkerResult {
   const dispatchedAt = new Date().toISOString();
   const timeoutMs = task.timeout ?? SCRIPT_TIMEOUT_MS;
@@ -585,6 +641,16 @@ async function dispatchWorkers(delegation: Delegation): Promise<void> {
     workers: delegation.tasks.map((t) => ({ task_id: t.id, type: t.type, priority: t.priority, started_at: new Date().toISOString() })),
   });
 
+  // Register pr_monitor tasks as inflight before spawning
+  const inflightDb = openDb();
+  for (const task of delegation.tasks) {
+    if (task.type === "pr_monitor") {
+      const signalId = (task.context.signal_id as string) ?? null;
+      if (signalId) inflightDb.addInflightPr(signalId, task.id, process.pid);
+    }
+  }
+  inflightDb.close();
+
   // Run all workers concurrently — allSettled so one failure doesn't kill the rest
   const settled = await Promise.allSettled(delegation.tasks.map((task) => runWorker(task)));
 
@@ -596,6 +662,10 @@ async function dispatchWorkers(delegation: Delegation): Promise<void> {
     const outcome = settled[i];
     if (outcome.status === "rejected") {
       console.error(`[franklin] Worker ${task.id} crashed:`, outcome.reason);
+      // Remove from inflight on crash
+      if (task.type === "pr_monitor" && task.context.signal_id) {
+        db.removeInflightPr(task.context.signal_id as string);
+      }
       continue;
     }
     const result = outcome.value;
@@ -603,6 +673,10 @@ async function dispatchWorkers(delegation: Delegation): Promise<void> {
       const { id, state } = task.mark_surfaced;
       console.log(`[franklin] markSurfaced: ${id}`);
       db.markSurfaced(id, state);
+    }
+    // Remove from inflight when worker completes (success or failure)
+    if (task.type === "pr_monitor" && task.context.signal_id) {
+      db.removeInflightPr(task.context.signal_id as string);
     }
   }
   db.close();
@@ -737,6 +811,9 @@ async function runCycle(startedAt: string): Promise<void> {
   // Generate deterministic tasks
   const dmTasks = generateDmTasks();
   const scheduledTasks = generateScheduledTasks();
+
+  // Write inflight PRs snapshot — prunes stale entries, informs brain of in-progress work
+  writeInflightPrs();
 
   // Brain tick — handles GitHub/Jira/Gmail signals
   runBrain();

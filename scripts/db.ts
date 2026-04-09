@@ -76,6 +76,13 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS quests_status     ON quests(status);
   CREATE INDEX IF NOT EXISTS quests_created_at ON quests(created_at);
+
+  CREATE TABLE IF NOT EXISTS inflight_prs (
+    signal_id       TEXT PRIMARY KEY,
+    task_id         TEXT NOT NULL,
+    pid             INTEGER,
+    started_at      TEXT NOT NULL
+  );
 `;
 
 export interface SurfacedRow {
@@ -355,6 +362,34 @@ export function openDb(path = DB_PATH) {
       db.prepare(`
         UPDATE quests SET status = ?, agent_status = COALESCE(?, agent_status), outcome = COALESCE(?, outcome), pr_url = COALESCE(?, pr_url), updated_at = ? WHERE id = ?
       `).run(status, fields?.agent_status ?? null, fields?.outcome ?? null, fields?.pr_url ?? null, now, id);
+    },
+
+    // ── Inflight PRs ────────────────────────────────────────────────────────
+
+    /**
+     * Record that a worker/quest is actively working on a PR.
+     */
+    addInflightPr(signalId: string, taskId: string, pid: number | null): void {
+      db.prepare(`
+        INSERT OR REPLACE INTO inflight_prs (signal_id, task_id, pid, started_at)
+        VALUES (?, ?, ?, ?)
+      `).run(signalId, taskId, pid, new Date().toISOString());
+    },
+
+    /**
+     * Remove an inflight PR entry (worker finished or was cleaned up).
+     */
+    removeInflightPr(signalId: string): void {
+      db.prepare(`DELETE FROM inflight_prs WHERE signal_id = ?`).run(signalId);
+    },
+
+    /**
+     * Get all inflight PR entries.
+     */
+    getInflightPrs(): Array<{ signal_id: string; task_id: string; pid: number | null; started_at: string }> {
+      return db.prepare(`SELECT * FROM inflight_prs`).all() as Array<{
+        signal_id: string; task_id: string; pid: number | null; started_at: string;
+      }>;
     },
 
     close(): void {
