@@ -307,20 +307,20 @@
 
       // Open PRs
       const PR_STATUS = {
-        ok:                 { label: 'ok',          cls: 'tag-green' },
-        ci_failing:         { label: 'CI failing',  cls: 'tag-red' },
-        conflict:           { label: 'conflict',    cls: 'tag-red' },
-        behind:             { label: 'behind',      cls: 'tag-yellow' },
-        changes_requested:  { label: 'changes req', cls: 'tag-orange' },
-        ready:              { label: 'ready',       cls: 'tag-green' },
-        blocked:            { label: 'blocked',     cls: 'tag-purple' },
+        ok:                 { icon: '✅', label: 'ok',          cls: 'tag-green' },
+        ci_failing:         { icon: '🔴', label: 'CI failing',  cls: 'tag-red' },
+        conflict:           { icon: '💥', label: 'conflict',    cls: 'tag-red' },
+        behind:             { icon: '⏳', label: 'behind',      cls: 'tag-yellow' },
+        changes_requested:  { icon: '🔄', label: 'changes req', cls: 'tag-orange' },
+        ready:              { icon: '🚀', label: 'ready',       cls: 'tag-green' },
+        blocked:            { icon: '🔒', label: 'blocked',     cls: 'tag-purple' },
       };
       const inflightSet = new Set(d.inflightPrs ?? []);
       const prRows = (d.openPrs ?? []).map(pr => {
-        const s = PR_STATUS[pr.status] ?? { label: pr.status, cls: 'tag-blue' };
+        const s = PR_STATUS[pr.status] ?? { icon: '❓', label: pr.status, cls: 'tag-blue' };
         const signalId = `github:pr:crcl-main/${pr.repo}/${pr.number}`;
         const inflightTag = inflightSet.has(signalId)
-          ? ' <span class="tag tag-cyan">worker active</span>'
+          ? ' <span class="tag tag-cyan">🦝 working</span>'
           : '';
         const commentTag = pr.reviewComments > 0
           ? ` <span style="color:var(--muted);font-size:11px">💬 ${pr.reviewComments}</span>`
@@ -329,12 +329,13 @@
           <div class="dispatch-row">
             <div class="dispatch-header">
               <span>
-                <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue)">${esc(pr.repo)}#${pr.number}</a>
+                <span title="${esc(s.label)}">${s.icon}</span>
+                <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue);margin-left:4px">${esc(pr.repo)}#${pr.number}</a>
                 ${commentTag}
               </span>
               <span style="display:flex;align-items:center;gap:4px">
                 <span class="tag ${s.cls}">${s.label}</span>
-                ${pr.approved ? '<span class="tag tag-green">approved</span>' : ''}
+                ${pr.approved ? '<span class="tag tag-green">✓ approved</span>' : ''}
                 ${inflightTag}
               </span>
             </div>
@@ -385,8 +386,8 @@
       // Scheduled tasks
       const scheduledRows = (d.scheduledTasks ?? []).map(t => {
         const kindTag = t.kind === 'script'
-          ? '<span class="tag tag-orange" title="shell script">⚡ script</span>'
-          : '<span class="tag tag-blue" title="LLM worker">🧠 worker</span>';
+          ? '<span title="script">⚡</span>'
+          : '<span title="worker">🧠</span>';
         return `
           <div class="side-row">
             <div style="display:flex;justify-content:space-between;align-items:center">

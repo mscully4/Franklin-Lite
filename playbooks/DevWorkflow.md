@@ -84,8 +84,11 @@ Optionally run `analyze-pr` first to self-review before the PR goes up — catch
 Once the PR is created:
 - Store `pr_url` on the quest
 - Post a comment on the Jira ticket via `update-ticket-after-pr` (CI status, changed files, Datadog signals)
-- Transition ticket to `In Review`
+- If CI is green: transition ticket to `In Review`
+- If CI is failing: keep ticket in `In Progress` until CI passes
 - DM Michael with the PR URL
+
+See `knowledge/jira_workflow.md` for the full transition rules. Never transition to Done.
 
 ---
 

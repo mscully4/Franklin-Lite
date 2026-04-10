@@ -238,9 +238,15 @@ function pollAuthoredPrs(cursor: GithubCursor, errors: string[]): GithubEntry[] 
       ? ghApiSafe<CheckRunsResult>(`/repos/${repo}/commits/${review.headSha}/check-runs?per_page=100`, { check_runs: [] }, errors)
       : { check_runs: [] };
 
-    const ciFailing = checks.check_runs
-      .filter((c) => c.conclusion === "failure" || c.conclusion === "timed_out")
-      .map((c) => c.name);
+    // Deduplicate by name — GitHub can return multiple runs for the same check
+    // (e.g. re-runs, stale entries). API returns newest first, so first occurrence wins.
+    const latestByName = new Map<string, string | null>();
+    for (const c of checks.check_runs) {
+      if (!latestByName.has(c.name)) latestByName.set(c.name, c.conclusion);
+    }
+    const ciFailing = [...latestByName.entries()]
+      .filter(([, conclusion]) => conclusion === "failure" || conclusion === "timed_out")
+      .map(([name]) => name);
 
     const jiraKey = item.title.match(/([A-Z]+-\d+)/)?.[1] ?? null;
     return searchItemToEntry(item, "pr_authored", {

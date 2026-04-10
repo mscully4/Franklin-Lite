@@ -119,7 +119,26 @@ Franklin proactively manages authored PRs to keep them in a reviewable state. **
 
 **Worker task objective framing:** Be explicit about what the worker should do. Example: `"Get PR #656 (crcl-main/credits-manager) back to a reviewable state. Fix CI failures: [lint, test]. Address 3 new review comments."` Not just "monitor PR."
 
+**Jira ticket transitions:** Workers should also update the linked Jira ticket (if `jira_key` is present in `entry.raw`). Include `jira_key` in the task context. See `knowledge/jira_workflow.md` for the full workflow, but the key rules are:
+- PR created + CI green → transition ticket to `In Review`
+- PR CI still failing → keep ticket in `In Progress`
+- PR fixed (CI green, comments addressed) → transition to `In Review`
+- PR merged → transition to `IN TESTING`
+- Never transition to `Done` — that requires human verification
+
 One task per PR. Never emit both a script and worker task for the same PR in one cycle.
+
+---
+
+### Step 4d — PR merge → ticket transition
+
+Also check signals for `my_activity` entries with `activity_type: "pr_merged"`. When a PR is merged:
+- Extract the Jira key from the PR title (same `[A-Z]+-\d+` pattern)
+- If a Jira key is found, emit a **worker task** to transition the ticket to `IN TESTING` and post a comment noting the merge and that staging verification with evidence is needed:
+  ```json
+  { "type": "jira_update", "context": { "signal_id": "...", "jira_key": "DEV-1234", "objective": "PR merged for DEV-1234. Transition ticket to IN TESTING. Post a comment noting the merge and that staging verification with evidence (logs, screenshots, etc.) is required before moving to Done.", "reason": "pr_merged" }, "mark_surfaced": { "id": "...", "state": { "merged": true } } }
+  ```
+- If no Jira key in the title, skip.
 
 ---
 

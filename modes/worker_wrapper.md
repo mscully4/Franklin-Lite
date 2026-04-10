@@ -120,10 +120,14 @@ If your task type is `pr_monitor`, your job is to **get the PR back to a reviewa
 
 5. **For ready-to-merge notifications** (`approved: true`, CI green, clean): DM the user that the PR is ready to merge. Include the PR URL. **Never merge automatically** — merging requires human approval.
 
-6. **Update the Jira ticket** if `jira_key` is present in the task context:
+6. **Update the Jira ticket** if `jira_key` is present in the task context (see `knowledge/jira_workflow.md` for full workflow):
    - Post a comment summarizing what was fixed (e.g. "Fixed CI lint failure, addressed 3 review comments, rebased on main").
-   - If the PR is now ready for re-review, transition the ticket to `In Review` (if it isn't already).
-   - If the PR was approved + green + clean, transition to `In Review` and note it's ready to merge.
+   - Transition the ticket based on the PR's final state after your fixes:
+     - CI green + no unresolved comments → `In Review`
+     - CI still failing (you couldn't fix it) → keep in `In Progress`
+     - PR approved + CI green + mergeable → `In Review` (note in comment: "ready to merge")
+     - PR merged → `IN TESTING`
+   - **Never transition to Done** — that requires human verification.
    - Use the `update-ticket-after-pr` skill or the `jira-ticket` skill for transitions.
    - If no `jira_key`, skip ticket updates silently.
 
