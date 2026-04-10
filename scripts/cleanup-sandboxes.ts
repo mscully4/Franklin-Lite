@@ -16,6 +16,8 @@ import { readdirSync, readFileSync, statSync, rmSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
+import { createLogger } from "./logger.js";
+const log = createLogger("cleanup");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RETENTION_DAYS = 7;
@@ -35,13 +37,13 @@ function readQuestJson(dir: string, id: string): Record<string, unknown> | null 
 
 function main(): void {
   if (!existsSync(SANDBOX_DIR)) {
-    console.log("No sandbox directory — nothing to clean up.");
+    log.info("No sandbox directory — nothing to clean up.");
     return;
   }
 
   const dirs = readdirSync(SANDBOX_DIR).filter((d: string) => d.startsWith("quest-"));
   if (dirs.length === 0) {
-    console.log("No sandbox directories found.");
+    log.info("No sandbox directories found.");
     return;
   }
 
@@ -58,7 +60,7 @@ function main(): void {
     if (active) {
       const status = active.status as string;
       if (status === "active" || (active as Record<string, unknown>).agent_status === "running") {
-        console.log(`  SKIP ${questId} — active`);
+        log.debug(`SKIP ${questId} — active`);
         skipped++;
         continue;
       }
@@ -72,7 +74,7 @@ function main(): void {
       // Skip needs_info — worker is waiting for user response
       const workerStatus = quest.agent_status as string | undefined;
       if (workerStatus === "needs_info" || quest.status === "needs_info") {
-        console.log(`  SKIP ${questId} — needs_info`);
+        log.debug(`SKIP ${questId} — needs_info`);
         skipped++;
         continue;
       }
@@ -82,7 +84,7 @@ function main(): void {
       if (updatedAt) {
         const age = now - new Date(updatedAt).getTime();
         if (age < RETENTION_MS) {
-          console.log(`  SKIP ${questId} — updated ${Math.round(age / 86_400_000)}d ago (< ${RETENTION_DAYS}d)`);
+          log.debug(`SKIP ${questId} — updated ${Math.round(age / 86_400_000)}d ago (< ${RETENTION_DAYS}d)`);
           skipped++;
           continue;
         }
@@ -93,7 +95,7 @@ function main(): void {
         const mtime = statSync(fullPath).mtimeMs;
         const age = now - mtime;
         if (age < RETENTION_MS) {
-          console.log(`  SKIP ${questId} — orphan, mtime ${Math.round(age / 86_400_000)}d ago (< ${RETENTION_DAYS}d)`);
+          log.debug(`SKIP ${questId} — orphan, mtime ${Math.round(age / 86_400_000)}d ago (< ${RETENTION_DAYS}d)`);
           skipped++;
           continue;
         }
@@ -107,14 +109,14 @@ function main(): void {
     // Safe to delete
     try {
       rmSync(fullPath, { recursive: true, force: true });
-      console.log(`  DELETE ${questId}`);
+      log.info(`DELETE ${questId}`);
       deleted++;
     } catch (err) {
-      console.error(`  ERROR deleting ${questId}:`, err);
+      log.error(`ERROR deleting ${questId}:`, err);
     }
   }
 
-  console.log(`Done. Deleted: ${deleted}, Skipped: ${skipped}`);
+  log.info(`Done. Deleted: ${deleted}, Skipped: ${skipped}`);
 }
 
 main();

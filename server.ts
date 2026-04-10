@@ -5,6 +5,8 @@ import { fileURLToPath } from "url";
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
 import { openDb } from "./scripts/db.js";
+import { createLogger } from "./scripts/logger.js";
+const log = createLogger("server");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE = join(__dirname, "state");
@@ -58,6 +60,7 @@ app.get("/api/state", (_req, res) => {
     jira: 10,
     gmail: 15,
     calendar: 10,
+    slack_channels: 10,
   };
   const scoutLastRun = (lastRun?.scout_last_run ?? {}) as Record<string, string>;
   const scouts = Object.entries(SCOUT_INTERVALS).map(([name, intervalMin]) => {
@@ -155,7 +158,7 @@ app.get("/api/state", (_req, res) => {
       else if (mergeableState === "behind") status = "behind";
       else if (changesRequested.length > 0) status = "changes_requested";
       else if (approved && mergeableState === "clean") status = "ready";
-      else if (mergeableState === "blocked") status = "blocked";
+      else if (mergeableState === "blocked") status = "awaiting review";
       return {
         repo: e.repo.replace(`${GITHUB_ORG}/`, ""),
         number: e.number,
@@ -169,6 +172,19 @@ app.get("/api/state", (_req, res) => {
         updatedAgo: timeAgo(e.updated_at),
       };
     });
+
+  // Review requests
+  const reviewRequests = (githubScout?.entries ?? [])
+    .filter((e) => e.type === "review_request")
+    .map((e) => ({
+      repo: e.repo.replace(`${GITHUB_ORG}/`, ""),
+      number: e.number,
+      title: e.title,
+      url: e.url,
+      author: (e.raw.state as string) ? e.author : e.author,
+      reviewedByMe: (e.raw.reviewed_by_me as boolean) ?? false,
+      updatedAgo: timeAgo(e.updated_at),
+    }));
 
   // Inflight PRs
   const inflightPrs = db.getInflightPrs().map((p) => p.signal_id);
@@ -193,6 +209,12 @@ app.get("/api/state", (_req, res) => {
       return order.indexOf(a.status) - order.indexOf(b.status);
     });
 
+  // Deploys
+  const deploys = db.getRecentDeploys(10).map((d) => ({
+    ...d,
+    createdAgo: timeAgo(d.created_at),
+  }));
+
   // Inbox stats from DB
   const pending = db.getPendingSlackEvents().length;
 
@@ -211,8 +233,10 @@ app.get("/api/state", (_req, res) => {
     meetings,
     scheduledTasks,
     openPrs,
+    reviewRequests,
     inflightPrs,
     jiraTickets,
+    deploys,
     slackInboxPending: pending,
     serverTime: new Date().toISOString(),
   });
@@ -222,7 +246,7 @@ app.get("/", (_req, res) => res.sendFile(join(__dirname, "index.html")));
 app.get("/avatar.png", (_req, res) => res.sendFile(join(__dirname, "Franklin-Avatar.png")));
 
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Franklin dashboard → http://localhost:${PORT}`);
+  log.info(`Franklin dashboard → http://localhost:${PORT}`);
 });
 
 // ── Socket Mode ───────────────────────────────────────────────────────────────
@@ -239,7 +263,7 @@ function acquireSocketLock(): boolean {
     if (!isNaN(pid)) {
       try {
         process.kill(pid, 0); // throws if process is dead
-        console.warn(`[socket] lock held by pid ${pid} — skipping socket startup`);
+        log.warn(`Socket lock held by pid ${pid} — skipping socket startup`);
         return false;
       } catch {
         // stale lock, proceed
@@ -263,10 +287,9 @@ process.on("exit", releaseSocketLock);
 process.on("SIGINT", () => { releaseSocketLock(); process.exit(0); });
 process.on("SIGTERM", () => { releaseSocketLock(); process.exit(0); });
 
+// slog replaced by tslog — keeping as alias for minimal diff on socket handlers
 function slog(msg: string): void {
-  const line = `${new Date().toISOString()} ${msg}\n`;
-  process.stdout.write(line);
-  appendFileSync(SERVER_LOG, line);
+  log.info(msg);
 }
 
 // ── Slack bot client for reactions ────────────────────────────────────────────
@@ -319,7 +342,9 @@ function handleSlackEvent(event: Record<string, unknown>): void {
   const text = (event.text as string) ?? "";
   if (text.includes("*Sent using*")) return;
 
-  const channel = (event.channel as string) ?? "";
+  // For reaction_added, Slack nests channel inside event.item
+  const item = (type === "reaction_added" ? event.item : null) as Record<string, unknown> | null;
+  const channel = (event.channel as string) ?? (item?.channel as string) ?? "";
   const channelType = (event.channel_type as string) ?? "channel";
 
   slog(`[socket] ${type} channel=${channel} channel_type=${channelType} user=${event.user ?? "?"} ts=${eventTs}`);
@@ -395,9 +420,9 @@ if (existsSync(SOCKET_TOKEN_FILE) && acquireSocketLock()) {
   });
 
   socketClient.start().catch((err: Error) => {
-    console.error("Slack socket failed to start:", err.message);
+    log.error("Slack socket failed to start:", err.message);
     writeSocketHeartbeat("error");
   });
 } else {
-  console.warn("Slack socket token not found — socket mode disabled.");
+  log.warn("Slack socket token not found — socket mode disabled.");
 }

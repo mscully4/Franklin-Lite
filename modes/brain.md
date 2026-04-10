@@ -128,6 +128,29 @@ Franklin proactively manages authored PRs to keep them in a reviewable state. **
 
 One task per PR. Never emit both a script and worker task for the same PR in one cycle.
 
+### Step 4c2 — Review requests (auto-review)
+
+For signals where `entry.type === "review_request"`:
+
+- If `current_state.reviewed_by_me === false` → emit a **quest** task to review the PR. No user approval needed — Franklin is specifically requested as reviewer.
+  ```json
+  {
+    "type": "quest",
+    "context": {
+      "signal_id": "github:pr:crcl-main/repo/123",
+      "objective": "Review PR #123 in crcl-main/repo (authored by jane.doe). Clone, check out the branch, run analyze-pr, post findings.",
+      "approach": ["Clone repo to sandbox", "Check out PR branch", "Run analyze-pr skill", "Post review findings", "DM user with summary"]
+    },
+    "mark_surfaced": { "id": "github:pr:crcl-main/repo/123", "state": { "reviewed_by_me": false } }
+  }
+  ```
+- If `current_state.reviewed_by_me === true` → no action. Emit a no-op to advance `mark_surfaced`:
+  ```json
+  { "type": "pr_monitor", "kind": "script", "command": "echo 'already reviewed'", "context": { "signal_id": "...", "reason": "already reviewed by me" }, "mark_surfaced": { "id": "...", "state": { "reviewed_by_me": true } } }
+  ```
+
+Each PR is reviewed once. The GitHub scout tracks `reviewed_by_me` via the `reviewed_prs` cursor — once Franklin submits a review, this flips to `true` and the signal won't re-fire.
+
 ---
 
 ### Step 4d — PR merge → ticket transition
@@ -178,6 +201,50 @@ Apply judgment — only generate a `jira_update` task if something worth telling
 - Transitions into Done / Won't Do / False Positive
 - Backlog tickets with no comment activity
 - Security scanning noise (CORP-* tickets where the only comment author is "Security DNR Automation")
+
+---
+
+## Step 6b — Process Slack Channel Signals
+
+### Ops alerts (`source === "slack_alert"`)
+
+These are from `#warn-developer-services`, already filtered to team-owned services. Every signal here is worth the user's attention.
+
+Emit a `dm_reply` task with `priority: "high"`:
+```json
+{
+  "type": "dm_reply",
+  "priority": "high",
+  "context": {
+    "signal_id": "slack:ops_alert:C03GX4SM7RN/...",
+    "source_tag": "ops_alert",
+    "text": "⚠️ Alert in #warn-developer-services affecting <service>: <summary of alert text>",
+    "channel": "D09TPK162SD"
+  },
+  "mark_surfaced": { "id": "slack:ops_alert:...", "state": { "surfaced": true } }
+}
+```
+
+### Deploy approvals (`source === "slack_deploy"`)
+
+These are from `#deploy-bot` where the user was specifically tagged as approver. Emit a **quest** task to check Datadog staging health and DM a recommendation:
+
+```json
+{
+  "type": "quest",
+  "context": {
+    "signal_id": "slack:deploy_approval:CTDAN6570/...",
+    "objective": "Deploy approval requested for <service>. Check Datadog staging health (error rate last 30 min, recent error logs last 15 min, alerting monitors). DM user with deploy summary, recommendation (✅ Looks safe / ⚠️ Hold / ❓ No data), and evidence. Then call db.insertDeploy() to persist for the dashboard.",
+    "approach": ["Query Datadog staging metrics", "Check error logs and monitors", "DM user with recommendation", "Persist to deploys table"],
+    "service": "<service name>",
+    "deploy_description": "<deploy description from message>",
+    "deploy_channel_ts": "<message ts for linking>"
+  },
+  "mark_surfaced": { "id": "slack:deploy_approval:...", "state": { "surfaced": true } }
+}
+```
+
+If Datadog has no staging data for the service, note it and leave recommendation neutral.
 
 ---
 

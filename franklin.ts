@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unl
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "./scripts/db.js";
+import log from "./scripts/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -37,6 +38,7 @@ const SCOUT_INTERVALS_MS: Record<string, number> = {
   jira: 10 * 60 * 1000,
   gmail: 15 * 60 * 1000,
   calendar: 10 * 60 * 1000,
+  slack_channels: 10 * 60 * 1000,
 };
 
 const SETTINGS_FILE = join(ROOT, "state", "settings.json");
@@ -74,7 +76,7 @@ function checkLock(): boolean {
 
   const ageMs = Date.now() - new Date(lock.last_heartbeat).getTime();
   if (ageMs >= LOCK_STALE_MS) {
-    console.log(`[franklin] Stale lock (heartbeat ${Math.round(ageMs / 1000)}s old) — overriding.`);
+    log.info(` Stale lock (heartbeat ${Math.round(ageMs / 1000)}s old) — overriding.`);
     return true;
   }
 
@@ -82,7 +84,7 @@ function checkLock(): boolean {
     process.kill(lock.pid, 0); // throws ESRCH if dead
     return false; // process is alive
   } catch {
-    console.log(`[franklin] Lock PID ${lock.pid} is dead — overriding.`);
+    log.info(` Lock PID ${lock.pid} is dead — overriding.`);
     return true;
   }
 }
@@ -130,10 +132,48 @@ function isScoutDue(name: string, lastRun: LastRun): boolean {
   return Date.now() - new Date(lastRanAt).getTime() >= intervalMs;
 }
 
+// ── Startup health checks ─────────────────────────────────────────────────────
+
+const HEALTH_PROBES: Record<string, { cmd: string; label: string }> = {
+  github:         { cmd: "gh auth status",                                          label: "GitHub CLI" },
+  jira:           { cmd: `test -f ${join(ROOT, "secrets", "jira_api_token.txt")}`,  label: "Jira API token" },
+  gmail:          { cmd: "which gws",                                               label: "Gmail (gws CLI)" },
+  calendar:       { cmd: "which gws",                                               label: "Calendar (gws CLI)" },
+  slack_channels: { cmd: `test -f ${join(ROOT, "secrets", "franklin_user_oauth_token.txt")}`, label: "Slack OAuth token" },
+};
+
+function runStartupChecks(enabledScouts: string[]): void {
+  log.info("Running startup health checks...");
+  const failures: string[] = [];
+
+  for (const scout of enabledScouts) {
+    const probe = HEALTH_PROBES[scout];
+    if (!probe) continue;
+    try {
+      execSync(probe.cmd, { cwd: ROOT, stdio: "ignore", timeout: 15_000 });
+      log.info(` ✓ ${probe.label}`);
+    } catch {
+      log.error(` ✗ ${probe.label} — unreachable`);
+      failures.push(probe.label);
+    }
+  }
+
+  if (failures.length > 0) {
+    const msg = `Startup failed — unreachable: ${failures.join(", ")}`;
+    log.fatal(msg);
+    try {
+      execSync(`osascript -e 'display notification "${msg}" with title "Franklin ☕" subtitle "Startup aborted" sound name "Blow"'`);
+    } catch { /* macOS notification best-effort */ }
+    process.exit(1);
+  }
+
+  log.info("All health checks passed.");
+}
+
 // ── Scout runner ───────────────────────────────────────────────────────────────
 
 function runScout(name: string): void {
-  console.log(`[franklin] Running ${name} scout...`);
+  log.info(` Running ${name} scout...`);
   try {
     execSync(`npx tsx scripts/scouts/${name}.ts`, {
       cwd: ROOT,
@@ -141,12 +181,12 @@ function runScout(name: string): void {
       timeout: 120_000,
     });
   } catch (e: unknown) {
-    console.error(`[franklin] ${name} scout failed: ${(e as Error).message?.slice(0, 200)}`);
+    log.error(` ${name} scout failed: ${(e as Error).message?.slice(0, 200)}`);
   }
 }
 
 function runFilterSignals(): void {
-  console.log("[franklin] Running filter-signals...");
+  log.info("Running filter-signals...");
   try {
     execSync("npx tsx scripts/filter-signals.ts", {
       cwd: ROOT,
@@ -154,7 +194,7 @@ function runFilterSignals(): void {
       timeout: 30_000,
     });
   } catch (e: unknown) {
-    console.error(`[franklin] filter-signals failed: ${(e as Error).message?.slice(0, 200)}`);
+    log.error(` filter-signals failed: ${(e as Error).message?.slice(0, 200)}`);
   }
 }
 
@@ -193,7 +233,8 @@ function generateDmTasks(): DelegationTask[] {
     if (!event.user_id || !authorizedIds.has(event.user_id)) continue;
 
     const source_tag =
-      event.type === "reaction_added" ? "whiskey" :
+      event.type === "reaction_added" && event.reaction === "whiskey" ? "whiskey" :
+      event.type === "reaction_added" ? "reaction" :
       event.channel_type === "im" ? "dm" :
       event.type === "app_mention" ? "mention" : "channel_msg";
 
@@ -219,7 +260,7 @@ function generateDmTasks(): DelegationTask[] {
   }
 
   if (tasks.length) {
-    console.log(`[franklin] Generated ${tasks.length} dm_reply task(s) from inbox`);
+    log.info(` Generated ${tasks.length} dm_reply task(s) from inbox`);
   }
   return tasks;
 }
@@ -266,7 +307,7 @@ function generateScheduledTasks(): DelegationTask[] {
   for (const job of scheduled) {
     const parsed = parseInterval(job.every);
     if (!parsed) {
-      console.error(`[franklin] Bad interval "${job.every}" on scheduled task ${job.id} — skipping`);
+      log.error(` Bad interval "${job.every}" on scheduled task ${job.id} — skipping`);
       continue;
     }
 
@@ -309,7 +350,7 @@ function generateScheduledTasks(): DelegationTask[] {
   }
 
   if (tasks.length) {
-    console.log(`[franklin] Generated ${tasks.length} scheduled task(s)`);
+    log.info(` Generated ${tasks.length} scheduled task(s)`);
   }
   return tasks;
 }
@@ -317,7 +358,7 @@ function generateScheduledTasks(): DelegationTask[] {
 // ── Brain ──────────────────────────────────────────────────────────────────────
 
 function runBrain(): void {
-  console.log("[franklin] Spawning brain...");
+  log.info("Spawning brain...");
   const result = spawnSync(
     "claude",
     [
@@ -330,7 +371,7 @@ function runBrain(): void {
   );
 
   if (result.status !== 0) {
-    console.error(`[franklin] Brain exited with status ${result.status ?? "timeout"}`);
+    log.error(` Brain exited with status ${result.status ?? "timeout"}`);
   }
 }
 
@@ -467,7 +508,7 @@ function spawnQuestAgent(task: DelegationTask): WorkerResult {
   });
   questDb.close();
 
-  console.log(`[franklin] Created ${questId} — spawning quest agent (fire-and-forget)...`);
+  log.info(` Created ${questId} — spawning quest agent (fire-and-forget)...`);
 
   const agentStatusFile = join(activeDir, `${questId}.agent.json`);
   writeJson(agentStatusFile, { status: "running", started_at: dispatchedAt, completed_at: null, result: null, error: null });
@@ -517,14 +558,14 @@ function writeInflightPrs(): void {
     // Prune if TTL expired
     const age = now - new Date(entry.started_at).getTime();
     if (age > INFLIGHT_TTL_MS) {
-      console.log(`[franklin] Pruning expired inflight PR: ${entry.signal_id} (${Math.round(age / 60_000)}m old)`);
+      log.info(` Pruning expired inflight PR: ${entry.signal_id} (${Math.round(age / 60_000)}m old)`);
       inflightDb.removeInflightPr(entry.signal_id);
       continue;
     }
     // Prune if PID is dead
     if (entry.pid) {
       try { process.kill(entry.pid, 0); } catch {
-        console.log(`[franklin] Pruning dead inflight PR: ${entry.signal_id} (PID ${entry.pid} dead)`);
+        log.info(` Pruning dead inflight PR: ${entry.signal_id} (PID ${entry.pid} dead)`);
         inflightDb.removeInflightPr(entry.signal_id);
         continue;
       }
@@ -569,7 +610,7 @@ function runScriptTask(task: DelegationTask): WorkerResult {
     return result;
   }
 
-  console.log(`[franklin] Running script ${task.id}: ${task.command}`);
+  log.info(` Running script ${task.id}: ${task.command}`);
   mkdirSync(WORKER_RESULTS_DIR, { recursive: true });
 
   let stdout = "";
@@ -582,7 +623,7 @@ function runScriptTask(task: DelegationTask): WorkerResult {
     const e = err as { status?: number; killed?: boolean; stderr?: string; stdout?: string };
     stdout = (e.stdout ?? "").trim();
     error = e.killed ? `timed out after ${timeoutMs / 1000}s` : (e.stderr ?? "").trim().slice(-500) || `exit code ${e.status}`;
-    console.error(`[franklin] Script ${task.id} failed:`, error);
+    log.error(` Script ${task.id} failed:`, error);
   }
 
   const completedAt = new Date().toISOString();
@@ -605,7 +646,7 @@ async function runWorker(task: DelegationTask): Promise<WorkerResult | null> {
   // Quest tasks spawn a background agent — don't block the cycle
   if (task.type === "quest") return spawnQuestAgent(task);
 
-  console.log(`[franklin] Spawning ${task.type} worker for ${task.id}...`);
+  log.info(` Spawning ${task.type} worker for ${task.id}...`);
   mkdirSync(WORKER_RESULTS_DIR, { recursive: true });
 
   const { exitCode, timedOut } = await spawnWithTimeout(
@@ -617,14 +658,14 @@ async function runWorker(task: DelegationTask): Promise<WorkerResult | null> {
   const completedAt = new Date().toISOString();
 
   if (timedOut) {
-    console.error(`[franklin] ${task.type}/${task.id} timed out after ${WORKER_TIMEOUT_MS / 60_000}m — killed`);
+    log.error(` ${task.type}/${task.id} timed out after ${WORKER_TIMEOUT_MS / 60_000}m — killed`);
     appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
       dispatched_at: dispatchedAt, completed_at: completedAt, status: "timeout", summary: "worker timed out" });
     return null;
   }
 
   if (exitCode !== 0) {
-    console.error(`[franklin] ${task.type}/${task.id} exited with code ${exitCode}`);
+    log.error(` ${task.type}/${task.id} exited with code ${exitCode}`);
   }
 
   const workerResult = readJson<WorkerResult>(join(WORKER_RESULTS_DIR, `${task.id}.json`));
@@ -661,7 +702,7 @@ async function dispatchWorkers(delegation: Delegation): Promise<void> {
     const task = delegation.tasks[i];
     const outcome = settled[i];
     if (outcome.status === "rejected") {
-      console.error(`[franklin] Worker ${task.id} crashed:`, outcome.reason);
+      log.error(` Worker ${task.id} crashed:`, outcome.reason);
       // Remove from inflight on crash
       if (task.type === "pr_monitor" && task.context.signal_id) {
         db.removeInflightPr(task.context.signal_id as string);
@@ -671,7 +712,7 @@ async function dispatchWorkers(delegation: Delegation): Promise<void> {
     const result = outcome.value;
     if (result?.status === "ok" && task.mark_surfaced) {
       const { id, state } = task.mark_surfaced;
-      console.log(`[franklin] markSurfaced: ${id}`);
+      log.info(` markSurfaced: ${id}`);
       db.markSurfaced(id, state);
     }
     // Remove from inflight when worker completes (success or failure)
@@ -689,7 +730,7 @@ let serverChild: ReturnType<typeof spawn> | null = null;
 function startServer(): void {
   if (serverChild && !serverChild.killed) return;
 
-  console.log("[franklin] Starting server...");
+  log.info("Starting server...");
   serverChild = spawn("npx", ["tsx", "server.ts"], {
     cwd: ROOT,
     stdio: "inherit",
@@ -698,12 +739,12 @@ function startServer(): void {
 
   serverChild.on("exit", (code, signal) => {
     if (signal === "SIGTERM" || signal === "SIGINT") return; // intentional shutdown
-    console.log(`[franklin] Server exited (code=${code ?? "?"}, signal=${signal ?? "none"}) — will restart next cycle`);
+    log.info(` Server exited (code=${code ?? "?"}, signal=${signal ?? "none"}) — will restart next cycle`);
     serverChild = null;
   });
 
   serverChild.on("error", (err) => {
-    console.error(`[franklin] Server spawn error: ${err.message}`);
+    log.error(` Server spawn error: ${err.message}`);
     serverChild = null;
   });
 }
@@ -712,7 +753,7 @@ function startServer(): void {
 
 async function runCycle(startedAt: string): Promise<void> {
   const cycleStart = new Date().toISOString();
-  console.log(`\n[franklin] ── Cycle at ${cycleStart} ──`);
+  log.info(`── Cycle at ${cycleStart} ──`);
 
   // Update heartbeat
   writeLock(startedAt);
@@ -735,7 +776,7 @@ async function runCycle(startedAt: string): Promise<void> {
   }
 
   if (!anyScoutRan) {
-    console.log("[franklin] No scouts due this cycle");
+    log.debug("No scouts due this cycle");
   }
 
   // filter-signals always runs (drains slack inbox each cycle)
@@ -758,7 +799,7 @@ async function runCycle(startedAt: string): Promise<void> {
       if (tracked && agent?.status === "running" && agent.started_at) {
         const elapsed = Date.now() - new Date(agent.started_at).getTime();
         if (elapsed > QUEST_TIMEOUT_MS) {
-          console.error(`[franklin] Quest ${qid} timed out after ${Math.round(elapsed / 60_000)}m — killing PID ${tracked.pid}`);
+          log.error(` Quest ${qid} timed out after ${Math.round(elapsed / 60_000)}m — killing PID ${tracked.pid}`);
           try { process.kill(tracked.pid, "SIGTERM"); } catch { /* already dead */ }
           setTimeout(() => { try { process.kill(tracked.pid, "SIGKILL"); } catch { /* ok */ } }, 5_000);
           // Write agent status so next reap cycle finalizes it
@@ -766,7 +807,7 @@ async function runCycle(startedAt: string): Promise<void> {
           runningQuests.delete(qid);
         } else {
           const mins = Math.round(elapsed / 60_000);
-          if (mins > 0 && mins % 10 === 0) console.log(`[franklin] Quest ${qid} still running (${mins}m elapsed)`);
+          if (mins > 0 && mins % 10 === 0) log.info(` Quest ${qid} still running (${mins}m elapsed)`);
         }
         continue; // still running or just killed — finalize next cycle
       }
@@ -776,7 +817,7 @@ async function runCycle(startedAt: string): Promise<void> {
         const rawResult = agent.result;
         const outcome = rawResult == null ? null : typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult);
         const finalStatus = agent.status === "completed" ? "completed" : "failed";
-        console.log(`[franklin] Finalizing quest ${qid} (agent=${agent.status})`);
+        log.info(` Finalizing quest ${qid} (agent=${agent.status})`);
         quest.status = finalStatus;
         quest.agent_status = finalStatus;
         quest.outcome = outcome ?? `agent ${agent.status}`;
@@ -793,19 +834,19 @@ async function runCycle(startedAt: string): Promise<void> {
           const reapDb = openDb();
           reapDb.updateQuestStatus(qid, finalStatus, { agent_status: finalStatus, outcome: outcome ?? undefined });
           reapDb.close();
-        } catch (err) { console.error(`[franklin] Failed to update DB for quest ${qid}:`, err); }
+        } catch (err) { log.error(` Failed to update DB for quest ${qid}:`, err); }
         // Dispatch log
         try {
           appendDispatchLog({ task_id: tracked?.taskId ?? qid, type: "quest", priority: "normal",
             dispatched_at: agent.started_at ?? quest.created_at as string, completed_at: new Date().toISOString(),
             status: finalStatus === "completed" ? "ok" : "error",
             summary: outcome ?? `Quest ${qid} ${finalStatus}` });
-        } catch (err) { console.error(`[franklin] Failed to log quest ${qid}:`, err); }
+        } catch (err) { log.error(` Failed to log quest ${qid}:`, err); }
         runningQuests.delete(qid);
       }
     }
   } catch (err) {
-    console.error("[franklin] Quest check-in error:", err);
+    log.error("Quest check-in error:", err);
   }
 
   // Generate deterministic tasks
@@ -833,10 +874,10 @@ async function runCycle(startedAt: string): Promise<void> {
   if (allTasks.length) {
     const merged: Delegation = { generated_at: new Date().toISOString(), tasks: allTasks };
     writeJson(DELEGATION_FILE, merged);
-    console.log(`[franklin] Dispatching ${allTasks.length} task(s) (${dmTasks.length} dm, ${scheduledTasks.length} sched, ${brainTasks.length} brain)...`);
+    log.info(` Dispatching ${allTasks.length} task(s) (${dmTasks.length} dm, ${scheduledTasks.length} sched, ${brainTasks.length} brain)...`);
     await dispatchWorkers(merged);
   } else {
-    console.log("[franklin] No tasks this cycle");
+    log.debug("No tasks this cycle");
   }
 
   // Daily housekeeping — prune old data (once per day)
@@ -847,7 +888,7 @@ async function runCycle(startedAt: string): Promise<void> {
     const inbox = pruneDb.pruneSlackInbox(2);
     pruneDb.close();
     if (dispatches || inbox) {
-      console.log(`[franklin] Pruned ${dispatches} dispatch entries, ${inbox} inbox events`);
+      log.info(` Pruned ${dispatches} dispatch entries, ${inbox} inbox events`);
     }
     lastRun.last_prune_date = todayLocal;
   }
@@ -857,7 +898,7 @@ async function runCycle(startedAt: string): Promise<void> {
   writeJson(LAST_RUN_FILE, lastRun);
 
   const elapsedSec = ((Date.now() - new Date(cycleStart).getTime()) / 1000).toFixed(1);
-  console.log(`[franklin] Cycle complete in ${elapsedSec}s`);
+  log.info(` Cycle complete in ${elapsedSec}s`);
 }
 
 // ── Status command ─────────────────────────────────────────────────────────────
@@ -866,7 +907,7 @@ function printStatus(): void {
   const lock = readJson<LockFile>(LOCK_FILE);
   const lastRun = readLastRun();
 
-  console.log("=== Franklin Status ===");
+  log.info("=== Franklin Status ===");
 
   if (lock) {
     const ageMs = Date.now() - new Date(lock.last_heartbeat).getTime();
@@ -878,21 +919,21 @@ function printStatus(): void {
         return false;
       }
     })();
-    console.log(`PID:            ${lock.pid} (${isAlive ? "alive" : "DEAD"})`);
-    console.log(`Started:        ${lock.started_at}`);
-    console.log(`Last heartbeat: ${lock.last_heartbeat} (${Math.round(ageMs / 1000)}s ago)`);
+    log.info(`PID:            ${lock.pid} (${isAlive ? "alive" : "DEAD"})`);
+    log.info(`Started:        ${lock.started_at}`);
+    log.info(`Last heartbeat: ${lock.last_heartbeat} (${Math.round(ageMs / 1000)}s ago)`);
   } else {
-    console.log("Not running (no lock file)");
+    log.info("Not running (no lock file)");
   }
 
-  console.log(`\nLast run completed: ${lastRun.last_run_completed ?? "never"}`);
+  log.info(`Last run completed: ${lastRun.last_run_completed ?? "never"}`);
 
   if (Object.keys(lastRun.scout_last_run).length > 0) {
-    console.log("Scout last run:");
+    log.info("Scout last run:");
     for (const [scout, ts] of Object.entries(lastRun.scout_last_run)) {
       const ageSec = Math.round((Date.now() - new Date(ts).getTime()) / 1000);
       const nextDueSec = Math.max(0, Math.round(((SCOUT_INTERVALS_MS[scout] ?? 0) - (Date.now() - new Date(ts).getTime())) / 1000));
-      console.log(`  ${scout}: last ran ${ageSec}s ago, next in ${nextDueSec}s`);
+      log.info(`  ${scout}: last ran ${ageSec}s ago, next in ${nextDueSec}s`);
     }
   }
 }
@@ -915,18 +956,30 @@ if (command === "status") {
 }
 
 if (!checkLock()) {
-  console.error("[franklin] Another instance is already running. Run `npx tsx franklin.ts status` to check.");
+  log.error("Another instance is already running. Run `npx tsx franklin.ts status` to check.");
   process.exit(1);
 }
 
 mkdirSync(join(ROOT, "state"), { recursive: true });
+
+// Determine which scouts are enabled and run health checks
+const settings = readJson<{ disabled_scouts?: string[] }>(SETTINGS_FILE);
+const disabledScouts = new Set(settings?.disabled_scouts ?? []);
+const enabledScouts = Object.keys(SCOUT_INTERVALS_MS).filter((s) => {
+  if (cliOnlyScouts && !cliOnlyScouts.includes(s)) return false;
+  if (cliSkipScouts.has(s)) return false;
+  if (disabledScouts.has(s)) return false;
+  return true;
+});
+runStartupChecks(enabledScouts);
+
 const startedAt = new Date().toISOString();
 writeLock(startedAt);
-console.log(`[franklin] Starting (PID ${process.pid}) at ${startedAt}`);
+log.info(` Starting (PID ${process.pid}) at ${startedAt}`);
 
 // Graceful shutdown
 function shutdown(signal: string): void {
-  console.log(`\n[franklin] ${signal} received — shutting down...`);
+  log.warn(`${signal} received — shutting down...`);
   if (serverChild) {
     serverChild.kill("SIGTERM");
   }
@@ -938,12 +991,12 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 process.on("uncaughtException", (err) => {
-  console.error("[franklin] Uncaught exception:", err);
+  log.fatal("Uncaught exception:", err);
   // Keep running — don't let a transient error kill the loop
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("[franklin] Unhandled rejection:", reason);
+  log.fatal("Unhandled rejection:", reason);
 });
 
 // Run cycles sequentially with a fixed gap between completions.

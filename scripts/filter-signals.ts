@@ -23,6 +23,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "./db.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("filter");
 import type { GithubEntry } from "./scouts/github.js";
 import type { JiraEntry } from "./scouts/jira.js";
 import type { GmailEntry } from "./scouts/gmail.js";
@@ -86,14 +88,28 @@ const githubResult = readJson<{ status: string; entries: GithubEntry[] }>(
   join(ROOT, "state", "scout_results", "github.json")
 );
 
+export function githubReviewState(entry: GithubEntry): Record<string, unknown> {
+  return {
+    reviewed_by_me: (entry.raw.reviewed_by_me as boolean) ?? false,
+  };
+}
+
 if (githubResult?.status === "ok" || githubResult?.status === "error") {
   for (const entry of githubResult.entries ?? []) {
-    if (entry.type !== "pr_authored") continue; // only authored PRs need state tracking for now
-    const current = githubState(entry);
-    const row = db.getSurfaced(entry.id);
-    const previous = row?.state ?? {};
-    if (!statesEqual(current, previous)) {
-      signals.push({ id: entry.id, source: "github", is_new: !row, previous_state: previous, current_state: current, entry });
+    if (entry.type === "pr_authored") {
+      const current = githubState(entry);
+      const row = db.getSurfaced(entry.id);
+      const previous = row?.state ?? {};
+      if (!statesEqual(current, previous)) {
+        signals.push({ id: entry.id, source: "github", is_new: !row, previous_state: previous, current_state: current, entry });
+      }
+    } else if (entry.type === "review_request") {
+      const current = githubReviewState(entry);
+      const row = db.getSurfaced(entry.id);
+      const previous = row?.state ?? {};
+      if (!statesEqual(current, previous)) {
+        signals.push({ id: entry.id, source: "github", is_new: !row, previous_state: previous, current_state: current, entry });
+      }
     }
   }
 }
@@ -140,6 +156,40 @@ if (gmailResult?.status === "ok" || gmailResult?.status === "error") {
   }
 }
 
+// ── Slack channels (ops alerts, deploy approvals) ────────────────────────────
+
+interface ChannelEntry {
+  id: string;
+  source: "ops_alert" | "deploy_approval";
+  ts: string;
+  channel: string;
+  author_id: string;
+  text: string;
+  permalink: string | null;
+  service: string | null;
+  deploy_description: string | null;
+}
+
+const channelResult = readJson<{ status: string; entries: ChannelEntry[] }>(
+  join(ROOT, "state", "scout_results", "slack_channels.json")
+);
+
+if (channelResult?.status === "ok" || channelResult?.status === "error") {
+  for (const entry of channelResult.entries ?? []) {
+    const row = db.getSurfaced(entry.id);
+    if (!row || !row.last_surfaced_at) {
+      signals.push({
+        id: entry.id,
+        source: entry.source === "ops_alert" ? "slack_alert" : "slack_deploy",
+        is_new: true,
+        previous_state: {},
+        current_state: { surfaced: true },
+        entry: entry as unknown as GithubEntry,
+      });
+    }
+  }
+}
+
 writeFileSync(join(OUT_DIR, "signals.json"), JSON.stringify(signals, null, 2));
 
 // ── Slack inbox ───────────────────────────────────────────────────────────────
@@ -152,7 +202,7 @@ writeFileSync(join(OUT_DIR, "slack_inbox.json"), JSON.stringify(pendingEvents, n
 
 db.close();
 
-console.log(
-  `filter-signals: ${signals.length} changed signals (github/jira), ` +
+log.info(
+  `${signals.length} changed signals (github/jira), ` +
   `${pendingEvents.length} slack inbox events → ${OUT_DIR}`
 );

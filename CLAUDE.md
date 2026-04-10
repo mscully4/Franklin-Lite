@@ -12,7 +12,7 @@ See `README.md` for setup, directory structure, and settings reference.
 
 ### Run Mode
 
-When the user says **"Run"**, read `modes/RUN.md` and follow it. Start the loop at a **2-minute interval**.
+When the user says **"Run"**, start the supervisor: `npx tsx franklin.ts`. It handles scouts, brain, and worker dispatch on a 30-second cycle.
 
 ### Dev Mode
 

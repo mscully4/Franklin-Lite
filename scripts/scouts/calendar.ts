@@ -15,6 +15,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "../db.js";
+import { createLogger } from "../logger.js";
+const log = createLogger("calendar");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
@@ -268,7 +270,7 @@ function main(): void {
     if (transcript) {
       entry.transcript_available = true;
       entry.transcript_name = transcript;
-      console.log(`  [calendar] Transcript found for "${entry.title}": ${transcript}`);
+      log.info(`Transcript found for "${entry.title}": ${transcript}`);
     }
   }
 
@@ -326,7 +328,7 @@ function main(): void {
   const pruned = db.pruneStale("calendar", 3);
   db.close();
 
-  console.log(`Calendar scout: ${entries.length} events, ${errors.length} errors, ${pruned} pruned -> ${RESULT_FILE}`);
+  log.info(`${entries.length} events, ${errors.length} errors, ${pruned} pruned -> ${RESULT_FILE}`);
 }
 
 main();

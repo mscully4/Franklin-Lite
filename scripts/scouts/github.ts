@@ -24,6 +24,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "../db.js";
+import { createLogger } from "../logger.js";
+const log = createLogger("github");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
@@ -143,7 +145,7 @@ function ghApiSafe<T>(endpoint: string, fallback: T, errors: string[]): T {
     return ghApi<T>(endpoint);
   } catch (e: unknown) {
     const msg = `${endpoint.split("?")[0]}: ${(e as Error).message?.slice(0, 150)}`;
-    console.error(`  [github] API error: ${msg}`);
+    log.error(` API error: ${msg}`);
     errors.push(msg);
     return fallback;
   }
@@ -218,17 +220,17 @@ function searchItemToEntry(
 // ── Sub-pollers ───────────────────────────────────────────────────────────────
 
 function pollAuthoredPrs(cursor: GithubCursor, errors: string[]): GithubEntry[] {
-  console.log("  [github] Fetching authored PRs...");
+  log.info(" Fetching authored PRs...");
   const result = ghApiSafe<GhSearchResult>(
     `/search/issues?q=author:${GITHUB_USER}+is:pr+is:open+org:${GITHUB_ORG}&per_page=50`,
     { items: [] },
     errors,
   );
-  console.log(`  [github] ${result.items.length} authored PRs, fetching CI + review state...`);
+  log.debug(` ${result.items.length} authored PRs, fetching CI + review state...`);
 
   return result.items.map((item, i) => {
     const repo = repoFromUrl(item.repository_url);
-    console.log(`  [github]   authored PR ${i + 1}/${result.items.length}: ${repo}#${item.number}`);
+    log.debug(`   authored PR ${i + 1}/${result.items.length}: ${repo}#${item.number}`);
 
     const review = getReviewState(repo, item.number, cursor, errors);
 
@@ -263,17 +265,17 @@ function pollAuthoredPrs(cursor: GithubCursor, errors: string[]): GithubEntry[] 
 }
 
 function pollReviewRequests(cursor: GithubCursor, errors: string[]): GithubEntry[] {
-  console.log("  [github] Fetching review requests...");
+  log.info(" Fetching review requests...");
   const result = ghApiSafe<GhSearchResult>(
     `/search/issues?q=review-requested:${GITHUB_USER}+is:pr+is:open+org:${GITHUB_ORG}&per_page=50`,
     { items: [] },
     errors,
   );
-  console.log(`  [github] ${result.items.length} review requests`);
+  log.debug(` ${result.items.length} review requests`);
 
   return result.items.map((item, i) => {
     const repo = repoFromUrl(item.repository_url);
-    console.log(`  [github]   review state ${i + 1}/${result.items.length}: ${repo}#${item.number}`);
+    log.debug(`   review state ${i + 1}/${result.items.length}: ${repo}#${item.number}`);
     const review = getReviewState(repo, item.number, cursor, errors);
     return searchItemToEntry(item, "review_request", {
       review_requested: true,
@@ -286,13 +288,13 @@ function pollReviewRequests(cursor: GithubCursor, errors: string[]): GithubEntry
 }
 
 function pollAssigned(errors: string[]): GithubEntry[] {
-  console.log("  [github] Fetching assigned issues/PRs...");
+  log.info(" Fetching assigned issues/PRs...");
   const result = ghApiSafe<GhSearchResult>(
     `/search/issues?q=assignee:${GITHUB_USER}+is:open+org:${GITHUB_ORG}&per_page=50`,
     { items: [] },
     errors,
   );
-  console.log(`  [github] ${result.items.length} assigned items`);
+  log.debug(` ${result.items.length} assigned items`);
   return result.items.map((item) =>
     searchItemToEntry(item, !!item.pull_request ? "assigned_pr" : "assigned_issue", { assigned: true }),
   );
@@ -300,13 +302,13 @@ function pollAssigned(errors: string[]): GithubEntry[] {
 
 function pollNotifications(cursor: GithubCursor, errors: string[]): GithubEntry[] {
   const since = new Date(new Date(cursor.last_sync).getTime() - OVERLAP_MS).toISOString();
-  console.log(`  [github] Fetching notifications since ${since.slice(0, 10)}...`);
+  log.debug(` Fetching notifications since ${since.slice(0, 10)}...`);
   const notifications = ghApiSafe<GhNotification[]>(
     `/notifications?participating=true&per_page=50&since=${since}`,
     [],
     errors,
   );
-  console.log(`  [github] ${notifications.length} notifications`);
+  log.debug(` ${notifications.length} notifications`);
 
   const entries: GithubEntry[] = [];
   for (const n of notifications) {
@@ -343,7 +345,7 @@ function pollMyActivity(
   cursor: GithubCursor,
   errors: string[],
 ): { entries: GithubEntry[]; lastEventId: string | null } {
-  console.log("  [github] Fetching outgoing activity...");
+  log.info(" Fetching outgoing activity...");
   let events: GhEvent[];
   try {
     events = ghApiOnePage<GhEvent[]>(`/users/${GITHUB_USER}/events?per_page=100`);
@@ -391,7 +393,7 @@ function pollMyActivity(
     }
   }
 
-  console.log(`  [github] ${entries.length} activity items`);
+  log.debug(` ${entries.length} activity items`);
   return { entries, lastEventId: newLastEventId ?? stopId };
 }
 
@@ -496,7 +498,7 @@ function main(): void {
   const pruned = db.pruneStale("github");
   db.close();
 
-  console.log(`GitHub scout: ${allEntries.length} entries, ${errors.length} errors, ${pruned} pruned → ${RESULT_FILE}`);
+  log.info(`${allEntries.length} entries, ${errors.length} errors, ${pruned} pruned → ${RESULT_FILE}`);
 }
 
 main();

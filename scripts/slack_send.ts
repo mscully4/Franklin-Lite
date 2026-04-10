@@ -12,6 +12,8 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { WebClient } from "@slack/web-api";
+import { createLogger } from "./logger.js";
+const log = createLogger("slack");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -38,7 +40,7 @@ const args = parseArgs(rest);
 async function main() {
   if (command === "message") {
     if (!args.channel || !args.text) {
-      console.error("Usage: slack_send.ts message --channel <id> --text <text> [--thread_ts <ts>]");
+      log.error("Usage: slack_send.ts message --channel <id> --text <text> [--thread_ts <ts>]");
       process.exit(1);
     }
     const result = await client.chat.postMessage({
@@ -50,7 +52,7 @@ async function main() {
 
   } else if (command === "react") {
     if (!args.channel || !args.ts || !args.emoji) {
-      console.error("Usage: slack_send.ts react --channel <id> --ts <ts> --emoji <name>");
+      log.error("Usage: slack_send.ts react --channel <id> --ts <ts> --emoji <name>");
       process.exit(1);
     }
     const result = await client.reactions.add({
@@ -61,12 +63,12 @@ async function main() {
     console.log(JSON.stringify({ ok: result.ok }));
 
   } else {
-    console.error("Commands: message, react");
+    log.error("Commands: message, react");
     process.exit(1);
   }
 }
 
 main().catch((err) => {
-  console.error(JSON.stringify({ ok: false, error: err.message }));
+  log.error(JSON.stringify({ ok: false, error: err.message }));
   process.exit(1);
 });

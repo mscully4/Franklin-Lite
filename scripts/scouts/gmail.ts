@@ -15,6 +15,8 @@ import { writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "../db.js";
+import { createLogger } from "../logger.js";
+const log = createLogger("gmail");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
@@ -92,7 +94,7 @@ function main(): void {
     }).toString();
   } catch (e: unknown) {
     const msg = (e as Error).message?.slice(0, 200) ?? "unknown error";
-    console.error(`[gmail] gws command failed: ${msg}`);
+    log.error(`gws command failed: ${msg}`);
     errors.push(msg);
     raw = "{}";
   }
@@ -141,7 +143,7 @@ function main(): void {
   const pruned = db.pruneStale("gmail", 14);
   db.close();
 
-  console.log(`Gmail scout: ${entries.length} messages (${entries.filter((e) => !e.is_automated).length} non-automated), ${errors.length} errors, ${pruned} pruned → ${RESULT_FILE}`);
+  log.info(`${entries.length} messages (${entries.filter((e) => !e.is_automated).length} non-automated), ${errors.length} errors, ${pruned} pruned → ${RESULT_FILE}`);
 }
 
 main();

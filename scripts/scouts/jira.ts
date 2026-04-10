@@ -20,6 +20,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "../db.js";
+import { createLogger } from "../logger.js";
+const log = createLogger("jira");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
@@ -174,13 +176,13 @@ function toEntry(issue: JiraIssueRaw, type: JiraEntry["type"]): JiraEntry {
 // ── Sub-pollers ────────────────────────────────────────────────────────────────
 
 function pollAssigned(token: string, errors: string[]): JiraEntry[] {
-  console.log("  [jira] Fetching assigned non-Done issues...");
+  log.info(" Fetching assigned non-Done issues...");
   const issues = jiraRaw(
     "project IS NOT EMPTY AND assignee = currentUser() AND statusCategory != Done",
     token,
     errors,
   );
-  console.log(`  [jira] ${issues.length} assigned issues`);
+  log.info(` ${issues.length} assigned issues`);
   return issues.map((i) => toEntry(i, "assigned"));
 }
 
@@ -190,9 +192,9 @@ function pollMentioned(cursor: JiraCursor, token: string, errors: string[]): Jir
     .toISOString()
     .slice(0, 10); // YYYY-MM-DD
   const jql = `project IS NOT EMPTY AND comment ~ '${JIRA_USERNAME}' AND updated >= '${since}'`;
-  console.log(`  [jira] Fetching mentions since ${since}...`);
+  log.info(` Fetching mentions since ${since}...`);
   const issues = jiraRaw(jql, token, errors);
-  console.log(`  [jira] ${issues.length} mentioned issues`);
+  log.info(` ${issues.length} mentioned issues`);
   return issues.map((i) => toEntry(i, "mentioned"));
 }
 
@@ -203,7 +205,7 @@ function enrichEntries(entries: JiraEntry[], token: string, errors: string[]): v
     (e) => e.key.startsWith("DEV-") || (ACTIVE_STATUSES.has(e.status) && e.last_comment === null),
   );
   if (toFetch.length === 0) return;
-  console.log(`  [jira] Enriching ${toFetch.length} issues for sprint + comment data...`);
+  log.info(` Enriching ${toFetch.length} issues for sprint + comment data...`);
 
   for (const entry of toFetch) {
     const detail = jiraViewRaw(entry.key, token, errors);
@@ -257,7 +259,7 @@ async function main() {
   // Enrich: fetch sprint data and latest comments via individual issue views
   enrichEntries(allEntries, token, errors);
 
-  console.log(`  [jira] Total: ${allEntries.length} entries, ${errors.length} errors`);
+  log.info(` Total: ${allEntries.length} entries, ${errors.length} errors`);
 
   const result = {
     scout: "jira",
@@ -278,7 +280,7 @@ async function main() {
   const pruned = db.pruneStale("jira");
   db.close();
 
-  console.log(`Jira scout: ${allEntries.length} entries, ${errors.length} errors, ${pruned} pruned → ${RESULT_FILE}`);
+  log.info(`${allEntries.length} entries, ${errors.length} errors, ${pruned} pruned → ${RESULT_FILE}`);
 }
 
 main().catch((err) => {

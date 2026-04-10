@@ -232,6 +232,71 @@
         `).join('')
         : `<div class="empty">idle</div>`;
 
+      // Open PRs (compact for sidebar)
+      const PR_STATUS = {
+        ok:                 { icon: '✅', cls: 'tag-green' },
+        ci_failing:         { icon: '🔴', cls: 'tag-red' },
+        conflict:           { icon: '💥', cls: 'tag-red' },
+        behind:             { icon: '⏳', cls: 'tag-yellow' },
+        changes_requested:  { icon: '🔄', cls: 'tag-orange' },
+        ready:              { icon: '🚀', cls: 'tag-green' },
+        'awaiting review':  { icon: '👀', cls: 'tag-purple' },
+      };
+      const inflightSet = new Set(d.inflightPrs ?? []);
+      const prRows = (d.openPrs ?? []).map(pr => {
+        const s = PR_STATUS[pr.status] ?? { icon: '❓', cls: 'tag-blue' };
+        const signalId = `github:pr:crcl-main/${pr.repo}/${pr.number}`;
+        const working = inflightSet.has(signalId) ? ' 🦝' : '';
+        const approved = pr.approved ? ' ✓' : '';
+        return `
+          <div class="side-row" style="font-size:11px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span><span title="${esc(pr.status)}">${s.icon}</span> <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue)">${esc(pr.repo)}#${pr.number}</a></span>
+              <span style="color:var(--muted)">${approved}${working}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Deploys
+      const DEPLOY_REC = {
+        safe:    { icon: '\u2705', cls: 'tag-green' },
+        hold:    { icon: '\u26a0\ufe0f', cls: 'tag-yellow' },
+        neutral: { icon: '\u2753', cls: 'tag-blue' },
+      };
+      const deployRows = (d.deploys ?? []).map(dep => {
+        const r = DEPLOY_REC[dep.recommendation] ?? DEPLOY_REC.neutral;
+        const link = dep.message_url
+          ? `<a href="${esc(dep.message_url)}" target="_blank" style="color:var(--blue)">${esc(dep.service)}</a>`
+          : esc(dep.service);
+        return `
+          <div class="side-row" style="font-size:11px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>${r.icon} ${link}</span>
+              <span class="tag ${r.cls}">${esc(dep.recommendation ?? 'neutral')}</span>
+            </div>
+            ${dep.description ? `<div class="side-muted">${esc(dep.description)}</div>` : ''}
+            <div class="side-muted">${esc(dep.requester ?? '')} &middot; ${esc(dep.createdAgo)}</div>
+          </div>
+        `;
+      }).join('');
+
+      // Review requests
+      const reviewRows = (d.reviewRequests ?? []).map(rr => {
+        const statusTag = rr.reviewedByMe
+          ? '<span class="tag tag-green">reviewed</span>'
+          : '<span class="tag tag-yellow">pending</span>';
+        return `
+          <div class="side-row" style="font-size:11px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span><a href="${esc(rr.url)}" target="_blank" style="color:var(--blue)">${esc(rr.repo)}#${rr.number}</a></span>
+              ${statusTag}
+            </div>
+            <div class="side-muted">${esc(rr.author)} &middot; ${esc(rr.updatedAgo)}</div>
+          </div>
+        `;
+      }).join('');
+
       document.getElementById('col-left').innerHTML = `
         <div class="section">
           <div class="section-title">Process</div>
@@ -252,6 +317,18 @@
         <div class="section">
           <div class="section-title">Workers${d.activeWorkers.length ? ` <span class="tag tag-green">${d.activeWorkers.length} active</span>` : ''}</div>
           ${workerRows}
+        </div>
+        <div class="section">
+          <div class="section-title">Open PRs${d.openPrs?.length ? ` <span class="tag tag-blue">${d.openPrs.length}</span>` : ''}</div>
+          ${prRows || '<div class="empty">No open PRs</div>'}
+        </div>
+        <div class="section">
+          <div class="section-title">Reviews${d.reviewRequests?.length ? ` <span class="tag tag-blue">${d.reviewRequests.length}</span>` : ''}</div>
+          ${reviewRows || '<div class="empty">None pending</div>'}
+        </div>
+        <div class="section">
+          <div class="section-title">Deploys${d.deploys?.length ? ` <span class="tag tag-blue">${d.deploys.length}</span>` : ''}</div>
+          ${deployRows || '<div class="empty">None recent</div>'}
         </div>
       `;
     }
@@ -305,53 +382,10 @@
         `;
       }).join('');
 
-      // Open PRs
-      const PR_STATUS = {
-        ok:                 { icon: '✅', label: 'ok',          cls: 'tag-green' },
-        ci_failing:         { icon: '🔴', label: 'CI failing',  cls: 'tag-red' },
-        conflict:           { icon: '💥', label: 'conflict',    cls: 'tag-red' },
-        behind:             { icon: '⏳', label: 'behind',      cls: 'tag-yellow' },
-        changes_requested:  { icon: '🔄', label: 'changes req', cls: 'tag-orange' },
-        ready:              { icon: '🚀', label: 'ready',       cls: 'tag-green' },
-        blocked:            { icon: '🔒', label: 'blocked',     cls: 'tag-purple' },
-      };
-      const inflightSet = new Set(d.inflightPrs ?? []);
-      const prRows = (d.openPrs ?? []).map(pr => {
-        const s = PR_STATUS[pr.status] ?? { icon: '❓', label: pr.status, cls: 'tag-blue' };
-        const signalId = `github:pr:crcl-main/${pr.repo}/${pr.number}`;
-        const inflightTag = inflightSet.has(signalId)
-          ? ' <span class="tag tag-cyan">🦝 working</span>'
-          : '';
-        const commentTag = pr.reviewComments > 0
-          ? ` <span style="color:var(--muted);font-size:11px">💬 ${pr.reviewComments}</span>`
-          : '';
-        return `
-          <div class="dispatch-row">
-            <div class="dispatch-header">
-              <span>
-                <span title="${esc(s.label)}">${s.icon}</span>
-                <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue);margin-left:4px">${esc(pr.repo)}#${pr.number}</a>
-                ${commentTag}
-              </span>
-              <span style="display:flex;align-items:center;gap:4px">
-                <span class="tag ${s.cls}">${s.label}</span>
-                ${pr.approved ? '<span class="tag tag-green">✓ approved</span>' : ''}
-                ${inflightTag}
-              </span>
-            </div>
-            <div class="dispatch-summary">${esc(pr.title)}</div>
-          </div>
-        `;
-      }).join('');
-
       document.getElementById('col-main').innerHTML = `
         <div class="section">
           <div class="section-title">Active Quests</div>
           ${questCards || '<div class="empty">No active quests</div>'}
-        </div>
-        <div class="section">
-          <div class="section-title">Open PRs${d.openPrs?.length ? ` <span class="tag tag-blue">${d.openPrs.length}</span>` : ''}</div>
-          ${prRows || '<div class="empty">No open PRs</div>'}
         </div>
         <div class="section">
           <div class="section-title">Jira Tickets${d.jiraTickets?.length ? ` <span class="tag tag-blue">${d.jiraTickets.length}</span>` : ''}</div>

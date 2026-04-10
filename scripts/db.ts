@@ -83,6 +83,18 @@ const SCHEMA = `
     pid             INTEGER,
     started_at      TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS deploys (
+    id              TEXT PRIMARY KEY,
+    service         TEXT NOT NULL,
+    description     TEXT,
+    requester       TEXT,
+    recommendation  TEXT,
+    evidence        TEXT,
+    message_url     TEXT,
+    created_at      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS deploys_created ON deploys(created_at);
 `;
 
 export interface SurfacedRow {
@@ -390,6 +402,43 @@ export function openDb(path = DB_PATH) {
       return db.prepare(`SELECT * FROM inflight_prs`).all() as Array<{
         signal_id: string; task_id: string; pid: number | null; started_at: string;
       }>;
+    },
+
+    // ── Deploys ──────────────────────────────────────────────────────────────
+
+    insertDeploy(entry: {
+      id: string;
+      service: string;
+      description?: string;
+      requester?: string;
+      recommendation?: string;
+      evidence?: string;
+      message_url?: string;
+    }): void {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT OR REPLACE INTO deploys (id, service, description, requester, recommendation, evidence, message_url, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(entry.id, entry.service, entry.description ?? null, entry.requester ?? null, entry.recommendation ?? null, entry.evidence ?? null, entry.message_url ?? null, now);
+    },
+
+    getRecentDeploys(limit = 10): Array<{
+      id: string;
+      service: string;
+      description: string | null;
+      requester: string | null;
+      recommendation: string | null;
+      evidence: string | null;
+      message_url: string | null;
+      created_at: string;
+    }> {
+      return db.prepare(`SELECT * FROM deploys ORDER BY created_at DESC LIMIT ?`).all(limit) as ReturnType<typeof this.getRecentDeploys>;
+    },
+
+    pruneDeploys(days = 7): number {
+      const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+      const result = db.prepare(`DELETE FROM deploys WHERE created_at < ?`).run(cutoff);
+      return result.changes;
     },
 
     close(): void {
