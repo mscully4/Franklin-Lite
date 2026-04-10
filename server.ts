@@ -173,6 +173,26 @@ app.get("/api/state", (_req, res) => {
   // Inflight PRs
   const inflightPrs = db.getInflightPrs().map((p) => p.signal_id);
 
+  // Jira tickets from scout — current sprint only
+  interface JiraScoutEntry { id: string; key: string; summary: string; status: string; priority: string; updated: string; labels: string[]; sprint: { name: string; state: string } | null; last_comment: { author: string; body: string; updated: string } | null }
+  const jiraScout = readJSON<{ entries?: JiraScoutEntry[] }>(join(STATE, "scout_results", "jira.json"));
+  const DEV_STATUSES = new Set(["Backlog", "In Progress", "In Review", "IN TESTING"]);
+  const jiraTickets = (jiraScout?.entries ?? [])
+    .filter((e) => DEV_STATUSES.has(e.status) && e.sprint?.state === "active")
+    .map((e) => ({
+      key: e.key,
+      summary: e.summary,
+      status: e.status,
+      priority: e.priority,
+      sprint: e.sprint?.name ?? null,
+      updatedAgo: timeAgo(e.updated),
+      lastComment: e.last_comment ? { author: e.last_comment.author, body: e.last_comment.body.slice(0, 100), ago: timeAgo(e.last_comment.updated) } : null,
+    }))
+    .sort((a, b) => {
+      const order = ["In Progress", "In Review", "IN TESTING", "Backlog"];
+      return order.indexOf(a.status) - order.indexOf(b.status);
+    });
+
   // Inbox stats from DB
   const pending = db.getPendingSlackEvents().length;
 
@@ -192,6 +212,7 @@ app.get("/api/state", (_req, res) => {
     scheduledTasks,
     openPrs,
     inflightPrs,
+    jiraTickets,
     slackInboxPending: pending,
     serverTime: new Date().toISOString(),
   });

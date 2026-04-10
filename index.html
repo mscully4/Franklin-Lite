@@ -354,10 +354,50 @@
           ${prRows || '<div class="empty">No open PRs</div>'}
         </div>
         <div class="section">
+          <div class="section-title">Jira Tickets${d.jiraTickets?.length ? ` <span class="tag tag-blue">${d.jiraTickets.length}</span>` : ''}</div>
+          ${renderJiraTickets(d)}
+        </div>
+        <div class="section">
           <div class="section-title">Recent Dispatches</div>
           ${dispatchRows || '<div class="empty">No recent dispatches</div>'}
         </div>
       `;
+    }
+
+    function renderJiraTickets(d) {
+      const JIRA_STATUS = {
+        'In Progress':  { icon: '🔨', cls: 'tag-blue' },
+        'In Review':    { icon: '👀', cls: 'tag-purple' },
+        'IN TESTING':   { icon: '🧪', cls: 'tag-cyan' },
+        'Backlog':      { icon: '📋', cls: 'tag-yellow' },
+      };
+      const tickets = d.jiraTickets ?? [];
+      if (!tickets.length) return '<div class="empty">No active tickets</div>';
+
+      let currentStatus = '';
+      return tickets.map(t => {
+        const s = JIRA_STATUS[t.status] ?? { icon: '❓', cls: 'tag-blue' };
+        const divider = t.status !== currentStatus
+          ? `<div style="color:var(--muted);font-size:10px;letter-spacing:0.5px;text-transform:uppercase;margin-top:${currentStatus ? '10px' : '0'};margin-bottom:4px">${s.icon} ${esc(t.status)}</div>`
+          : '';
+        currentStatus = t.status;
+        const commentHint = t.lastComment
+          ? `<div class="side-muted">💬 ${esc(t.lastComment.author)} ${esc(t.lastComment.ago)}: ${esc(t.lastComment.body)}</div>`
+          : '';
+        return `
+          ${divider}
+          <div class="dispatch-row">
+            <div class="dispatch-header">
+              <span>
+                <a href="https://circlepay.atlassian.net/browse/${esc(t.key)}" target="_blank" style="color:var(--blue)">${esc(t.key)}</a>
+              </span>
+              <span style="color:var(--muted);font-size:11px">${esc(t.updatedAgo)}</span>
+            </div>
+            <div class="dispatch-summary">${esc(t.summary)}</div>
+            ${commentHint}
+          </div>
+        `;
+      }).join('');
     }
 
     function renderRight(d) {

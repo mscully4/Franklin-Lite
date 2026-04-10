@@ -119,7 +119,7 @@ Franklin proactively manages authored PRs to keep them in a reviewable state. **
 
 **Worker task objective framing:** Be explicit about what the worker should do. Example: `"Get PR #656 (crcl-main/credits-manager) back to a reviewable state. Fix CI failures: [lint, test]. Address 3 new review comments."` Not just "monitor PR."
 
-**Jira ticket transitions:** Workers should also update the linked Jira ticket (if `jira_key` is present in `entry.raw`). Include `jira_key` in the task context. See `knowledge/jira_workflow.md` for the full workflow, but the key rules are:
+**Jira ticket transitions:** Workers should also update the linked Jira ticket (if `jira_key` is present in `entry.raw`). Include `jira_key` in the task context. See `playbooks/JiraWorkflow.md` for the full workflow, but the key rules are:
 - PR created + CI green → transition ticket to `In Review`
 - PR CI still failing → keep ticket in `In Progress`
 - PR fixed (CI green, comments addressed) → transition to `In Review`

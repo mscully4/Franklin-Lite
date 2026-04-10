@@ -120,7 +120,7 @@ If your task type is `pr_monitor`, your job is to **get the PR back to a reviewa
 
 5. **For ready-to-merge notifications** (`approved: true`, CI green, clean): DM the user that the PR is ready to merge. Include the PR URL. **Never merge automatically** — merging requires human approval.
 
-6. **Update the Jira ticket** if `jira_key` is present in the task context (see `knowledge/jira_workflow.md` for full workflow):
+6. **Update the Jira ticket** if `jira_key` is present in the task context (see `playbooks/JiraWorkflow.md` for full workflow):
    - Post a comment summarizing what was fixed (e.g. "Fixed CI lint failure, addressed 3 review comments, rebased on main").
    - Transition the ticket based on the PR's final state after your fixes:
      - CI green + no unresolved comments → `In Review`
@@ -155,6 +155,7 @@ To use a playbook: read it and follow the phases that apply to your task.
 | Playbook | When to use |
 |----------|-------------|
 | `DevWorkflow.md` | Any dev task: ticket → plan → implement → PR → CI babysit → cleanup |
+| `JiraWorkflow.md` | Jira ticket transitions: when to move between lanes, evidence requirements |
 
 ### Skills library
 

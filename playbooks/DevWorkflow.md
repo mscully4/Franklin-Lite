@@ -88,7 +88,7 @@ Once the PR is created:
 - If CI is failing: keep ticket in `In Progress` until CI passes
 - DM Michael with the PR URL
 
-See `knowledge/jira_workflow.md` for the full transition rules. Never transition to Done.
+See `playbooks/JiraWorkflow.md` for the full transition rules. Never transition to Done.
 
 ---
 

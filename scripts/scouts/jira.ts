@@ -47,6 +47,7 @@ export interface JiraEntry {
   priority: string;
   updated: string;
   labels: string[];
+  sprint: { name: string; state: string } | null;
   last_comment: { author: string; body: string; updated: string } | null;
   github_pr_url: string | null;
   raw: Record<string, unknown>;
@@ -146,6 +147,11 @@ function toEntry(issue: JiraIssueRaw, type: JiraEntry["type"]): JiraEntry {
   // GitHub PR link sometimes lives in remote links or the description; skip for now
   const githubPrUrl: string | null = null;
 
+  // Sprint — customfield_10122 is an array of sprint objects; pick the active one (or last)
+  const sprintField = f.customfield_10122 as Array<{ name: string; state: string }> | undefined;
+  const activeSprint = sprintField?.find((s) => s.state === "active") ?? sprintField?.at(-1) ?? null;
+  const sprint = activeSprint ? { name: activeSprint.name, state: activeSprint.state } : null;
+
   return {
     id: `jira:ticket:${issue.key}`,
     type,
@@ -155,6 +161,7 @@ function toEntry(issue: JiraIssueRaw, type: JiraEntry["type"]): JiraEntry {
     priority: f.priority?.name ?? "Medium",
     updated: f.updated,
     labels: f.labels ?? [],
+    sprint,
     last_comment: lastComment,
     github_pr_url: githubPrUrl,
     raw: {
@@ -189,20 +196,23 @@ function pollMentioned(cursor: JiraCursor, token: string, errors: string[]): Jir
   return issues.map((i) => toEntry(i, "mentioned"));
 }
 
-function enrichActiveIssues(entries: JiraEntry[], token: string, errors: string[]): void {
-  // For In Progress / IN TESTING entries that came from the list command
-  // (which returns minimal comment data), fetch full detail to get latest comment.
+function enrichEntries(entries: JiraEntry[], token: string, errors: string[]): void {
+  // The list command doesn't return custom fields (sprint) or full comments.
+  // Fetch full detail for DEV tickets to get sprint data and latest comment.
   const toFetch = entries.filter(
-    (e) => ACTIVE_STATUSES.has(e.status) && e.last_comment === null,
+    (e) => e.key.startsWith("DEV-") || (ACTIVE_STATUSES.has(e.status) && e.last_comment === null),
   );
   if (toFetch.length === 0) return;
-  console.log(`  [jira] Enriching ${toFetch.length} active issues for latest comment...`);
+  console.log(`  [jira] Enriching ${toFetch.length} issues for sprint + comment data...`);
 
   for (const entry of toFetch) {
     const detail = jiraViewRaw(entry.key, token, errors);
     if (!detail) continue;
     const full = toEntry(detail, entry.type);
-    entry.last_comment = full.last_comment;
+    entry.sprint = full.sprint;
+    if (!entry.last_comment && full.last_comment) {
+      entry.last_comment = full.last_comment;
+    }
     entry.raw = { ...entry.raw, comment_count: full.raw.comment_count };
   }
 }
@@ -244,8 +254,8 @@ async function main() {
   add(pollAssigned(token, errors));
   add(pollMentioned(cursor, token, errors));
 
-  // Enrich: fetch latest comment for active issues missing comment data
-  enrichActiveIssues(allEntries, token, errors);
+  // Enrich: fetch sprint data and latest comments via individual issue views
+  enrichEntries(allEntries, token, errors);
 
   console.log(`  [jira] Total: ${allEntries.length} entries, ${errors.length} errors`);
 
