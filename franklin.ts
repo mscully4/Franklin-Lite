@@ -200,7 +200,10 @@ function runFilterSignals(): void {
 
 // ── DM task generation ────────────────────────────────────────────────────────
 // Deterministic: every DM from an authorized user gets a dm_reply task.
+// Channel/group messages only get a task if Franklin is explicitly @-mentioned.
 // Does NOT go through the brain — avoids LLM dropping messages.
+
+const FRANKLIN_BOT_USER_ID = "U0AS0UZGW6L";
 
 interface SlackInboxEvent {
   event_ts: string;
@@ -232,11 +235,19 @@ function generateDmTasks(): DelegationTask[] {
   for (const event of inbox) {
     if (!event.user_id || !authorizedIds.has(event.user_id)) continue;
 
+    const isDm = event.channel_type === "im";
+    const isAppMention = event.type === "app_mention";
+    const isReaction = event.type === "reaction_added";
+    const textMentionsFranklin = (event.text ?? "").includes(`<@${FRANKLIN_BOT_USER_ID}>`);
+
+    // In channels/groups, only respond if Franklin is explicitly mentioned or reacted to
+    if (!isDm && !isAppMention && !isReaction && !textMentionsFranklin) continue;
+
     const source_tag =
-      event.type === "reaction_added" && event.reaction === "whiskey" ? "whiskey" :
-      event.type === "reaction_added" ? "reaction" :
-      event.channel_type === "im" ? "dm" :
-      event.type === "app_mention" ? "mention" : "channel_msg";
+      isReaction && event.reaction === "whiskey" ? "whiskey" :
+      isReaction ? "reaction" :
+      isDm ? "dm" :
+      isAppMention || textMentionsFranklin ? "mention" : "channel_msg";
 
     tasks.push({
       id: `dm-${event.event_ts}`,
