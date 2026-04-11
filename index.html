@@ -158,6 +158,53 @@
     a:hover { text-decoration: underline; }
     @keyframes fadein { from { opacity: 0.4; } to { opacity: 1; } }
     .flash { animation: fadein 0.4s ease; }
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.6);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 520px;
+      max-width: 90vw;
+      max-height: 80vh;
+      overflow-y: auto;
+      padding: 20px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.5);
+    }
+    .modal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .modal-head h2 { font-size: 14px; font-weight: 600; }
+    .modal-close {
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 18px; line-height: 1; padding: 0 4px;
+    }
+    .modal-close:hover { color: var(--text); }
+    .modal-section { margin-bottom: 12px; }
+    .modal-section-title {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px;
+      color: var(--muted); font-weight: 600; margin-bottom: 6px;
+    }
+    .modal-kv {
+      display: flex; justify-content: space-between; gap: 12px;
+      padding: 4px 0; border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .modal-kv:last-child { border-bottom: none; }
+    .modal-kv-label { color: var(--muted); white-space: nowrap; }
+    .modal-kv-value { color: var(--text); text-align: right; word-break: break-word; }
   </style>
 </head>
 <body>
@@ -165,6 +212,16 @@
     <h1><img src="/avatar.png" alt="Franklin">Franklin</h1>
     <div id="refresh">loading...</div>
   </header>
+
+  <div class="modal-overlay" id="deploy-modal" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="deploy-modal-title"></h2>
+        <button class="modal-close" onclick="document.getElementById('deploy-modal').classList.remove('open')">&times;</button>
+      </div>
+      <div id="deploy-modal-body"></div>
+    </div>
+  </div>
 
   <div class="layout">
     <div class="col" id="col-left"></div>
@@ -185,6 +242,58 @@
       if (s < 3600) return `${Math.floor(s / 60)}m ago`;
       if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
       return `${Math.floor(s / 86400)}d ago`;
+    }
+
+    function showDeployModal(idx) {
+      const dep = window.__deploys[idx];
+      if (!dep) return;
+      const DEPLOY_REC = {
+        safe:    { icon: '\u2705', cls: 'tag-green' },
+        hold:    { icon: '\u26a0\ufe0f', cls: 'tag-yellow' },
+        neutral: { icon: '\u2753', cls: 'tag-blue' },
+      };
+      const r = DEPLOY_REC[dep.recommendation] ?? DEPLOY_REC.neutral;
+      document.getElementById('deploy-modal-title').innerHTML =
+        `${r.icon} ${esc(dep.service)} <span class="tag ${r.cls}" style="margin-left:8px">${esc(dep.recommendation ?? 'neutral')}</span>`;
+
+      let body = '';
+
+      // Summary row
+      body += `<div class="modal-section">`;
+      if (dep.requester) body += `<div class="modal-kv"><span class="modal-kv-label">Requester</span><span class="modal-kv-value">${esc(dep.requester)}</span></div>`;
+      body += `<div class="modal-kv"><span class="modal-kv-label">Time</span><span class="modal-kv-value">${esc(dep.createdAgo)}</span></div>`;
+      if (dep.message_url) body += `<div class="modal-kv"><span class="modal-kv-label">Slack</span><span class="modal-kv-value"><a href="${esc(dep.message_url)}" target="_blank">View message</a></span></div>`;
+      body += `</div>`;
+
+      // Description
+      if (dep.description) {
+        body += `<div class="modal-section"><div class="modal-section-title">Description</div><div style="font-size:12px;color:var(--text)">${esc(dep.description)}</div></div>`;
+      }
+
+      // Evidence
+      if (dep.evidence) {
+        body += `<div class="modal-section"><div class="modal-section-title">Evidence</div>`;
+        try {
+          const ev = typeof dep.evidence === 'string' ? JSON.parse(dep.evidence) : dep.evidence;
+          for (const [k, v] of Object.entries(ev)) {
+            const label = k.replace(/_/g, ' ');
+            let val;
+            if (typeof v === 'object' && v !== null) {
+              // Render nested objects as sub-rows
+              val = Object.entries(v).map(([sk, sv]) => `${esc(sk)}: ${esc(String(sv))}`).join('<br>');
+            } else {
+              val = esc(String(v));
+            }
+            body += `<div class="modal-kv"><span class="modal-kv-label">${esc(label)}</span><span class="modal-kv-value">${val}</span></div>`;
+          }
+        } catch {
+          body += `<div style="font-size:12px;color:var(--text);white-space:pre-wrap">${esc(String(dep.evidence))}</div>`;
+        }
+        body += `</div>`;
+      }
+
+      document.getElementById('deploy-modal-body').innerHTML = body;
+      document.getElementById('deploy-modal').classList.add('open');
     }
 
     const STATUS_TAG = {
@@ -264,18 +373,17 @@
         hold:    { icon: '\u26a0\ufe0f', cls: 'tag-yellow' },
         neutral: { icon: '\u2753', cls: 'tag-blue' },
       };
-      const deployRows = (d.deploys ?? []).map(dep => {
+      // Store deploy data for modal access
+      window.__deploys = d.deploys ?? [];
+      const deployRows = (d.deploys ?? []).map((dep, i) => {
         const r = DEPLOY_REC[dep.recommendation] ?? DEPLOY_REC.neutral;
-        const link = dep.message_url
-          ? `<a href="${esc(dep.message_url)}" target="_blank" style="color:var(--blue)">${esc(dep.service)}</a>`
-          : esc(dep.service);
+        const hasDetail = dep.evidence || dep.description;
         return `
-          <div class="side-row" style="font-size:11px">
+          <div class="side-row" style="font-size:11px${hasDetail ? ';cursor:pointer' : ''}" ${hasDetail ? `onclick="showDeployModal(${i})"` : ''}>
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <span>${r.icon} ${link}</span>
+              <span>${r.icon} ${esc(dep.service)}</span>
               <span class="tag ${r.cls}">${esc(dep.recommendation ?? 'neutral')}</span>
             </div>
-            ${dep.description ? `<div class="side-muted">${esc(dep.description)}</div>` : ''}
             <div class="side-muted">${esc(dep.requester ?? '')} &middot; ${esc(dep.createdAgo)}</div>
           </div>
         `;
@@ -513,6 +621,10 @@
         el.textContent = 'error -- retrying...';
       }
     }
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') document.getElementById('deploy-modal').classList.remove('open');
+    });
 
     refresh();
     setInterval(refresh, 10000);
