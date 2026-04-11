@@ -204,6 +204,7 @@ function runFilterSignals(): void {
 // Does NOT go through the brain — avoids LLM dropping messages.
 
 const FRANKLIN_BOT_USER_ID = "U0AS0UZGW6L";
+const FRANKLIN_BOT_CHANNEL = "C0AS53FFR3K"; // #franklin-bot — respond to everything here
 
 interface SlackInboxEvent {
   event_ts: string;
@@ -236,12 +237,13 @@ function generateDmTasks(): DelegationTask[] {
     if (!event.user_id || !authorizedIds.has(event.user_id)) continue;
 
     const isDm = event.channel_type === "im";
+    const isBotChannel = event.channel === FRANKLIN_BOT_CHANNEL;
     const isAppMention = event.type === "app_mention";
     const isReaction = event.type === "reaction_added";
     const textMentionsFranklin = (event.text ?? "").includes(`<@${FRANKLIN_BOT_USER_ID}>`);
 
-    // In channels/groups, only respond if Franklin is explicitly mentioned or reacted to
-    if (!isDm && !isAppMention && !isReaction && !textMentionsFranklin) continue;
+    // DMs and #franklin-bot: respond to everything. Other channels: only when explicitly @'d or reacted to.
+    if (!isDm && !isBotChannel && !isAppMention && !isReaction && !textMentionsFranklin) continue;
 
     const source_tag =
       isReaction && event.reaction === "whiskey" ? "whiskey" :
