@@ -152,6 +152,7 @@
     }
     .side-row:last-child { border-bottom: none; }
     .side-muted { color: var(--muted); font-size: 11px; margin-top: 1px; }
+    .hidden { display: none; }
 
     .empty { color: var(--muted); font-style: italic; font-size: 12px; }
     a { color: var(--blue); text-decoration: none; }
@@ -565,19 +566,31 @@
         `;
       }).join('');
 
-      // Scheduled tasks
+      // Scheduled tasks — preserve expanded state across refreshes
+      const expandedTasks = new Set(
+        document.querySelectorAll('.sched-detail:not(.hidden)')
+      );
+      const expandedIds = new Set();
+      expandedTasks.forEach(el => {
+        const row = el.closest('.side-row');
+        if (row) expandedIds.add(row.dataset.taskId);
+      });
+
       const scheduledRows = (d.scheduledTasks ?? []).map(t => {
         const kindTag = t.kind === 'script'
           ? '<span title="script">⚡</span>'
           : '<span title="worker">🧠</span>';
+        const detailClass = expandedIds.has(t.id) ? 'sched-detail' : 'sched-detail hidden';
         return `
-          <div class="side-row">
+          <div class="side-row" data-task-id="${esc(t.id)}" style="cursor:pointer" onclick="this.querySelector('.sched-detail').classList.toggle('hidden')">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span style="color:var(--cyan);font-weight:600">${esc(t.id)}</span>
               <span style="display:flex;gap:4px">${kindTag}<span class="tag tag-purple">${esc(t.every)}</span></span>
             </div>
-            <div class="side-muted">${esc(t.objective)}</div>
-            <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
+            <div class="${detailClass}">
+              <div class="side-muted">${esc(t.objective)}</div>
+              <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
+            </div>
           </div>
         `;
       }).join('');
