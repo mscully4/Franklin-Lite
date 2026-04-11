@@ -91,7 +91,7 @@ const SCHEMA = `
     requester       TEXT,
     recommendation  TEXT,
     evidence        TEXT,
-    message_url     TEXT,
+    message_url     TEXT UNIQUE,
     created_at      TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS deploys_created ON deploys(created_at);
