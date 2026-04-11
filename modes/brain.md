@@ -227,15 +227,15 @@ Emit a `dm_reply` task with `priority: "high"`:
 
 ### Deploy approvals (`source === "slack_deploy"`)
 
-These are from `#deploy-bot` where the user was specifically tagged as approver. Emit a **quest** task to check Datadog staging health and DM a recommendation:
+These are from `#deploy-bot` where the user was specifically tagged as approver. Emit a **quest** task to verify the deploy is safe:
 
 ```json
 {
   "type": "quest",
   "context": {
     "signal_id": "slack:deploy_approval:CTDAN6570/...",
-    "objective": "Deploy approval requested for <service>. Check Datadog staging health (error rate last 30 min, recent error logs last 15 min, alerting monitors). DM user with deploy summary, recommendation (✅ Looks safe / ⚠️ Hold / ❓ No data), and evidence. Then call db.insertDeploy() to persist for the dashboard.",
-    "approach": ["Query Datadog staging metrics", "Check error logs and monitors", "DM user with recommendation", "Persist to deploys table"],
+    "objective": "Deploy approval requested for <service>. Verify this deploy is safe by: (1) Extract the PR or commit info from the deploy-bot message text. Use `gh` to pull the list of commits included in the change (e.g. `gh pr view <number> --repo crcl-main/<service> --json commits` or compare the deployment ref against what's currently in prod). (2) Review the commit diffs to understand what changed — note new endpoints, modified business logic, changed configs, DB migrations, etc. (3) Check Datadog staging health: error rate (last 30 min), recent error logs (last 15 min), alerting monitors. (4) Cross-reference the changes with Datadog: if the commits touch specific endpoints or services, query Datadog for those specific resource names / routes to verify they're functioning correctly in staging (e.g. search spans for the affected endpoints, check for elevated latency or errors). (5) DM user with: deploy summary (what's changing), commit list, recommendation (✅ Looks safe / ⚠️ Hold / ❓ No data), and evidence for each check. (6) Call db.insertDeploy() to persist for the dashboard — include the structured evidence JSON.",
+    "approach": ["Extract PR/commits from deploy-bot message", "Pull commit diffs via gh CLI", "Summarize what changed", "Query Datadog staging health (generic)", "Query Datadog for endpoints/routes touched by the changes", "DM user with full evidence and recommendation", "Persist to deploys table"],
     "service": "<service name>",
     "deploy_description": "<deploy description from message>",
     "deploy_channel_ts": "<message ts for linking>"
@@ -244,7 +244,7 @@ These are from `#deploy-bot` where the user was specifically tagged as approver.
 }
 ```
 
-If Datadog has no staging data for the service, note it and leave recommendation neutral.
+If Datadog has no staging data for the service, note it and leave recommendation neutral. If the PR/commits can't be extracted from the message, fall back to generic health checks only and note the gap.
 
 ---
 
