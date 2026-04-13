@@ -95,7 +95,36 @@ const SCHEMA = `
     created_at      TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS deploys_created ON deploys(created_at);
+
+  CREATE TABLE IF NOT EXISTS channel_policies (
+    channel_id       TEXT PRIMARY KEY,
+    name             TEXT,
+    trigger_mode     TEXT NOT NULL DEFAULT 'mention',
+    allowed_users    TEXT NOT NULL DEFAULT 'owner',
+    allowed_tasks    TEXT NOT NULL DEFAULT '["dm_reply"]',
+    respond_to_bots  INTEGER NOT NULL DEFAULT 0,
+    updated_at       TEXT NOT NULL,
+    updated_by       TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS channel_user_rules (
+    channel_id       TEXT NOT NULL,
+    user_id          TEXT NOT NULL,
+    permission       TEXT NOT NULL DEFAULT 'allow',
+    allowed_tasks    TEXT,
+    updated_at       TEXT NOT NULL,
+    updated_by       TEXT,
+    PRIMARY KEY (channel_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS channel_user_rules_user ON channel_user_rules(user_id);
 `;
+
+export interface IsAllowedResult {
+  allowed: boolean;
+  maxTaskType: "dm_reply" | "quest";
+  triggerMode: "all" | "mention" | "none";
+  respondToBots: boolean;
+}
 
 export interface SurfacedRow {
   id: string;
@@ -110,6 +139,18 @@ export function openDb(path = DB_PATH) {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.exec(SCHEMA);
+
+  // Seed default channel policies if the table is empty
+  const policyCount = (db.prepare("SELECT COUNT(*) as cnt FROM channel_policies").get() as { cnt: number }).cnt;
+  if (policyCount === 0) {
+    const now = new Date().toISOString();
+    const seedStmt = db.prepare(
+      "INSERT INTO channel_policies (channel_id, name, trigger_mode, allowed_users, allowed_tasks, respond_to_bots, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+    seedStmt.run("__default__", "Default",          "mention", "owner",      '["dm_reply"]',          0, now, null);
+    seedStmt.run("im",          "Direct Messages",  "all",     "authorized", '["dm_reply","quest"]',  0, now, null);
+    seedStmt.run("C0AS53FFR3K", "franklin-bot",     "all",     "authorized", '["dm_reply","quest"]',  0, now, null);
+  }
 
   return {
     /**
@@ -404,6 +445,67 @@ export function openDb(path = DB_PATH) {
       }>;
     },
 
+    // ── Metrics ─────────────────────────────────────────────────────────────
+
+    /**
+     * Aggregate dispatch_log, quest, and deploy counts since a given ISO timestamp.
+     * Pass null for all-time.
+     */
+    getMetrics(since: string | null): {
+      tasks: number;
+      byType: Record<string, number>;
+      byStatus: Record<string, number>;
+      quests: number;
+      questsWithPr: number;
+      deploys: number;
+    } {
+      const whereClause = since ? `WHERE completed_at >= ?` : ``;
+      const params = since ? [since] : [];
+
+      // Dispatch counts by type and status
+      const rows = db.prepare(
+        `SELECT type, status, COUNT(*) as cnt FROM dispatch_log ${whereClause} GROUP BY type, status`
+      ).all(...params) as Array<{ type: string; status: string; cnt: number }>;
+
+      const byType: Record<string, number> = {};
+      const byStatus: Record<string, number> = {};
+      let tasks = 0;
+      for (const r of rows) {
+        byType[r.type] = (byType[r.type] ?? 0) + r.cnt;
+        byStatus[r.status] = (byStatus[r.status] ?? 0) + r.cnt;
+        tasks += r.cnt;
+      }
+
+      // Quest counts
+      const questWhere = since ? `WHERE status = 'completed' AND updated_at >= ?` : `WHERE status = 'completed'`;
+      const questParams = since ? [since] : [];
+      const questRow = db.prepare(
+        `SELECT COUNT(*) as cnt FROM quests ${questWhere}`
+      ).get(...questParams) as { cnt: number };
+
+      const questPrWhere = since
+        ? `WHERE status = 'completed' AND pr_url IS NOT NULL AND updated_at >= ?`
+        : `WHERE status = 'completed' AND pr_url IS NOT NULL`;
+      const questPrRow = db.prepare(
+        `SELECT COUNT(*) as cnt FROM quests ${questPrWhere}`
+      ).get(...questParams) as { cnt: number };
+
+      // Deploy counts
+      const deployWhere = since ? `WHERE created_at >= ?` : ``;
+      const deployRow = db.prepare(
+        `SELECT COUNT(*) as cnt FROM deploys ${deployWhere}`
+      ).get(...params) as { cnt: number };
+
+      return {
+        tasks,
+        byType,
+        byStatus,
+        quests: questRow.cnt,
+        questsWithPr: questPrRow.cnt,
+        deploys: deployRow.cnt,
+      };
+    },
+
     // ── Deploys ──────────────────────────────────────────────────────────────
 
     insertDeploy(entry: {
@@ -439,6 +541,185 @@ export function openDb(path = DB_PATH) {
       const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
       const result = db.prepare(`DELETE FROM deploys WHERE created_at < ?`).run(cutoff);
       return result.changes;
+    },
+
+    // ── Channel auth ──────────────────────────────────────────────────────────
+
+    getChannelPolicy(channelId: string): {
+      channel_id: string; name: string | null; trigger_mode: string;
+      allowed_users: string; allowed_tasks: string[]; respond_to_bots: boolean;
+      updated_at: string; updated_by: string | null;
+    } | null {
+      const row = db.prepare(`SELECT * FROM channel_policies WHERE channel_id = ?`).get(channelId) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      return {
+        channel_id: row.channel_id as string,
+        name: row.name as string | null,
+        trigger_mode: row.trigger_mode as string,
+        allowed_users: row.allowed_users as string,
+        allowed_tasks: JSON.parse(row.allowed_tasks as string),
+        respond_to_bots: Boolean(row.respond_to_bots),
+        updated_at: row.updated_at as string,
+        updated_by: row.updated_by as string | null,
+      };
+    },
+
+    resolveChannelPolicy(channelId: string, channelType: string): {
+      channel_id: string; name: string | null; trigger_mode: string;
+      allowed_users: string; allowed_tasks: string[]; respond_to_bots: boolean;
+    } {
+      const LAST_RESORT = {
+        channel_id: "__hardcoded__", name: null, trigger_mode: "mention" as const,
+        allowed_users: "owner", allowed_tasks: ["dm_reply"], respond_to_bots: false,
+      };
+      // 1. Exact channel match
+      const exact = this.getChannelPolicy(channelId);
+      if (exact) return exact;
+      // 2. DM fallback
+      if (channelType === "im") {
+        const im = this.getChannelPolicy("im");
+        if (im) return im;
+      }
+      // 3. Default
+      const def = this.getChannelPolicy("__default__");
+      if (def) return def;
+      // 4. Hardcoded last resort
+      return LAST_RESORT;
+    },
+
+    getUserOverride(channelId: string, userId: string): {
+      permission: string; allowed_tasks: string[] | null;
+    } | null {
+      const row = db.prepare(
+        `SELECT permission, allowed_tasks FROM channel_user_rules WHERE channel_id = ? AND user_id = ?`
+      ).get(channelId, userId) as { permission: string; allowed_tasks: string | null } | undefined;
+      if (!row) return null;
+      return {
+        permission: row.permission,
+        allowed_tasks: row.allowed_tasks ? JSON.parse(row.allowed_tasks) : null,
+      };
+    },
+
+    isAllowed(
+      channelId: string, channelType: string, userId: string,
+      ownerId: string, authorizedIds: Set<string>,
+    ): IsAllowedResult {
+      const NOT_ALLOWED: IsAllowedResult = { allowed: false, maxTaskType: "dm_reply", triggerMode: "none", respondToBots: false };
+
+      // 1. Check per-user override
+      const override = this.getUserOverride(channelId, userId);
+      if (override?.permission === "deny") return NOT_ALLOWED;
+
+      // 2. Resolve channel policy
+      const policy = this.resolveChannelPolicy(channelId, channelType);
+
+      // 3. Check allowed_users (unless user has an explicit allow override)
+      if (!override) {
+        const users = policy.allowed_users;
+        if (users === "owner" && userId !== ownerId) return NOT_ALLOWED;
+        if (users === "authorized" && !authorizedIds.has(userId)) return NOT_ALLOWED;
+        if (users !== "owner" && users !== "authorized" && users !== "any") {
+          // JSON array of user IDs
+          try {
+            const arr = JSON.parse(users) as string[];
+            if (!arr.includes(userId)) return NOT_ALLOWED;
+          } catch { return NOT_ALLOWED; }
+        }
+      }
+
+      // 4. Determine max task type from override or policy
+      const tasks = override?.allowed_tasks ?? policy.allowed_tasks;
+      const maxTaskType = tasks.includes("quest") ? "quest" as const : "dm_reply" as const;
+
+      return {
+        allowed: true,
+        maxTaskType,
+        triggerMode: policy.trigger_mode as "all" | "mention" | "none",
+        respondToBots: policy.respond_to_bots,
+      };
+    },
+
+    listChannelPolicies(): Array<{
+      channel_id: string; name: string | null; trigger_mode: string;
+      allowed_users: string; allowed_tasks: string[]; respond_to_bots: boolean;
+      updated_at: string; updated_by: string | null;
+    }> {
+      const rows = db.prepare(`SELECT * FROM channel_policies ORDER BY channel_id`).all() as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        channel_id: row.channel_id as string,
+        name: row.name as string | null,
+        trigger_mode: row.trigger_mode as string,
+        allowed_users: row.allowed_users as string,
+        allowed_tasks: JSON.parse(row.allowed_tasks as string),
+        respond_to_bots: Boolean(row.respond_to_bots),
+        updated_at: row.updated_at as string,
+        updated_by: row.updated_by as string | null,
+      }));
+    },
+
+    listUserRules(channelId?: string): Array<{
+      channel_id: string; user_id: string; permission: string;
+      allowed_tasks: string[] | null; updated_at: string; updated_by: string | null;
+    }> {
+      const query = channelId
+        ? db.prepare(`SELECT * FROM channel_user_rules WHERE channel_id = ? ORDER BY user_id`)
+        : db.prepare(`SELECT * FROM channel_user_rules ORDER BY channel_id, user_id`);
+      const rows = (channelId ? query.all(channelId) : query.all()) as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        channel_id: row.channel_id as string,
+        user_id: row.user_id as string,
+        permission: row.permission as string,
+        allowed_tasks: row.allowed_tasks ? JSON.parse(row.allowed_tasks as string) : null,
+        updated_at: row.updated_at as string,
+        updated_by: row.updated_by as string | null,
+      }));
+    },
+
+    upsertChannelPolicy(fields: {
+      channel_id: string; name?: string; trigger_mode: string;
+      allowed_users: string; allowed_tasks: string[]; respond_to_bots: boolean;
+    }, updatedBy: string): void {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO channel_policies (channel_id, name, trigger_mode, allowed_users, allowed_tasks, respond_to_bots, updated_at, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(channel_id) DO UPDATE SET
+          name = excluded.name,
+          trigger_mode = excluded.trigger_mode,
+          allowed_users = excluded.allowed_users,
+          allowed_tasks = excluded.allowed_tasks,
+          respond_to_bots = excluded.respond_to_bots,
+          updated_at = excluded.updated_at,
+          updated_by = excluded.updated_by
+      `).run(
+        fields.channel_id, fields.name ?? null, fields.trigger_mode,
+        fields.allowed_users, JSON.stringify(fields.allowed_tasks),
+        fields.respond_to_bots ? 1 : 0, now, updatedBy,
+      );
+    },
+
+    upsertUserRule(fields: {
+      channel_id: string; user_id: string; permission: string;
+      allowed_tasks?: string[];
+    }, updatedBy: string): void {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO channel_user_rules (channel_id, user_id, permission, allowed_tasks, updated_at, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(channel_id, user_id) DO UPDATE SET
+          permission = excluded.permission,
+          allowed_tasks = excluded.allowed_tasks,
+          updated_at = excluded.updated_at,
+          updated_by = excluded.updated_by
+      `).run(
+        fields.channel_id, fields.user_id, fields.permission,
+        fields.allowed_tasks ? JSON.stringify(fields.allowed_tasks) : null,
+        now, updatedBy,
+      );
+    },
+
+    removeUserRule(channelId: string, userId: string): void {
+      db.prepare(`DELETE FROM channel_user_rules WHERE channel_id = ? AND user_id = ?`).run(channelId, userId);
     },
 
     close(): void {

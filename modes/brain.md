@@ -74,6 +74,12 @@ An array of raw Slack events, already drained and deduplicated. Every event here
 
 **Do not generate `dm_reply` tasks.** The supervisor generates them deterministically before calling you. Your job is signals only.
 
+Each event in `slack_inbox.json` now includes a `max_task_type` field:
+
+- `null` — the user is not authorized in this channel. Skip the event entirely.
+- `"dm_reply"` — the user's channel policy only permits conversational replies. Do not generate a `quest` from this event.
+- `"quest"` — the user can trigger quests. Apply normal judgment about whether the message warrants a quest.
+
 ---
 
 ## Step 4 — Process GitHub Signals

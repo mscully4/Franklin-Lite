@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
 import { openDb } from "./scripts/db.js";
+import { SCOUT_INTERVALS_MS, readJson } from "./scripts/config.js";
 import { createLogger } from "./scripts/logger.js";
 const log = createLogger("server");
 
@@ -18,10 +19,6 @@ const db = openDb();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function readJSON<T>(path: string): T | null {
-  try { return JSON.parse(readFileSync(path, "utf8")) as T; }
-  catch { return null; }
-}
 
 function timeAgo(isoStr: string | null): string {
   if (!isoStr) return "never";
@@ -49,31 +46,25 @@ function readQuestDir(dir: string): string[] {
 // ── Dashboard API ─────────────────────────────────────────────────────────────
 
 app.get("/api/state", (_req, res) => {
-  const lock = readJSON<Record<string, string>>(join(STATE, "franklin.lock"));
-  const lastRun = readJSON<Record<string, unknown>>(join(STATE, "last_run.json"));
+  const lock = readJson<Record<string, string>>(join(STATE, "franklin.lock"));
+  const lastRun = readJson<Record<string, unknown>>(join(STATE, "last_run.json"));
 
   const heartbeatTs = lock?.last_heartbeat ?? null;
   const running = !isStale(heartbeatTs, 300);
 
-  const SCOUT_INTERVALS: Record<string, number> = {
-    github: 10,
-    jira: 10,
-    gmail: 15,
-    calendar: 10,
-    slack_channels: 10,
-  };
   const scoutLastRun = (lastRun?.scout_last_run ?? {}) as Record<string, string>;
-  const scouts = Object.entries(SCOUT_INTERVALS).map(([name, intervalMin]) => {
+  const scouts = Object.entries(SCOUT_INTERVALS_MS).map(([name, ms]) => {
+    const intervalMin = ms / 60_000;
     const last = scoutLastRun[name] ?? null;
     return { name, last, lastAgo: timeAgo(last), intervalMin, overdue: isStale(last, intervalMin * 60 * 1.5) };
   });
 
   const activeDir = join(STATE, "quests", "active");
   const activeQuests = readQuestDir(activeDir).map((file) => {
-    const quest = readJSON<Record<string, unknown>>(join(activeDir, file));
+    const quest = readJson<Record<string, unknown>>(join(activeDir, file));
     if (!quest) return null;
     const logFile = file.replace(".json", ".log.json");
-    const logs = (readJSON<Array<Record<string, unknown>>>(join(activeDir, logFile)) ?? []);
+    const logs = (readJson<Array<Record<string, unknown>>>(join(activeDir, logFile)) ?? []);
     const recentLogs = logs.slice(-5).reverse().map((e) => ({
       ago: timeAgo(e.timestamp as string),
       action: e.action,
@@ -94,7 +85,7 @@ app.get("/api/state", (_req, res) => {
   const completedDir = join(STATE, "quests", "completed");
   const completedQuests = readQuestDir(completedDir)
     .map((file) => {
-      const quest = readJSON<Record<string, unknown>>(join(completedDir, file));
+      const quest = readJson<Record<string, unknown>>(join(completedDir, file));
       if (!quest) return null;
       return { id: quest.id, objective: ((quest.objective as string) ?? "").slice(0, 80), updatedAgo: timeAgo(quest.updated_at as string) };
     })
@@ -103,7 +94,7 @@ app.get("/api/state", (_req, res) => {
     .reverse();
 
   // Calendar
-  const calendar = readJSON<{ events?: Array<{ title: string; start: string; end: string; notified?: boolean; location?: string; meetingUrl?: string; transcript_available?: boolean }> }>(join(STATE, "calendar.json"));
+  const calendar = readJson<{ events?: Array<{ title: string; start: string; end: string; notified?: boolean; location?: string; meetingUrl?: string; transcript_available?: boolean }> }>(join(STATE, "calendar.json"));
   const now = Date.now();
   const nowDate = new Date();
   const today = `${nowDate.getFullYear()}-${String(nowDate.getMonth() + 1).padStart(2, "0")}-${String(nowDate.getDate()).padStart(2, "0")}`;
@@ -119,12 +110,12 @@ app.get("/api/state", (_req, res) => {
     .slice(0, 8);
 
   // Socket status
-  const socketData = readJSON<{ status: string; updated_at: string }>(join(STATE, "slack_socket.json"));
+  const socketData = readJson<{ status: string; updated_at: string }>(join(STATE, "slack_socket.json"));
   const socketStatus = socketData?.status ?? "unknown";
   const socketStale = isStale(socketData?.updated_at ?? null, 300);
 
   // Active workers and recent dispatch history
-  const activeWorkersData = readJSON<{ updated_at: string; workers: Array<{ task_id: string; type: string; priority: string; started_at: string }> }>(join(STATE, "active_workers.json"));
+  const activeWorkersData = readJson<{ updated_at: string; workers: Array<{ task_id: string; type: string; priority: string; started_at: string }> }>(join(STATE, "active_workers.json"));
   const activeWorkers = (activeWorkersData?.workers ?? []).map((w) => ({
     ...w,
     startedAgo: timeAgo(w.started_at),
@@ -136,12 +127,12 @@ app.get("/api/state", (_req, res) => {
   }));
 
   // Scheduled tasks
-  const scheduledTasks = (readJSON<Array<{ id: string; every: string; kind?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
+  const scheduledTasks = (readJson<Array<{ id: string; every: string; kind?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
     .map((t) => ({ id: t.id, every: t.every, kind: t.kind ?? "worker", objective: t.context?.objective ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
 
   // Open PRs from GitHub scout
   interface GhScoutEntry { id: string; type: string; title: string; url: string; repo: string; number: number; updated_at: string; raw: Record<string, unknown> }
-  const githubScout = readJSON<{ entries?: GhScoutEntry[] }>(join(STATE, "scout_results", "github.json"));
+  const githubScout = readJson<{ entries?: GhScoutEntry[] }>(join(STATE, "scout_results", "github.json"));
   const openPrs = (githubScout?.entries ?? [])
     .filter((e) => e.type === "pr_authored")
     .map((e) => {
@@ -191,7 +182,7 @@ app.get("/api/state", (_req, res) => {
 
   // Jira tickets from scout — current sprint only
   interface JiraScoutEntry { id: string; key: string; summary: string; status: string; priority: string; updated: string; labels: string[]; sprint: { name: string; state: string } | null; last_comment: { author: string; body: string; updated: string } | null }
-  const jiraScout = readJSON<{ entries?: JiraScoutEntry[] }>(join(STATE, "scout_results", "jira.json"));
+  const jiraScout = readJson<{ entries?: JiraScoutEntry[] }>(join(STATE, "scout_results", "jira.json"));
   const DEV_STATUSES = new Set(["Backlog", "In Progress", "In Review", "IN TESTING"]);
   const jiraTickets = (jiraScout?.entries ?? [])
     .filter((e) => DEV_STATUSES.has(e.status) && e.sprint?.state === "active")
@@ -237,9 +228,61 @@ app.get("/api/state", (_req, res) => {
     inflightPrs,
     jiraTickets,
     deploys,
+    channelPolicies: db.listChannelPolicies(),
+    channelUserRules: db.listUserRules(),
     slackInboxPending: pending,
     serverTime: new Date().toISOString(),
   });
+});
+
+// ── Metrics API ──────────────────────────────────────────────────────────────
+
+function countQuestActions(since: string | null): Record<string, number> {
+  const counts: Record<string, number> = {};
+  const dirs = [join(STATE, "quests", "completed"), join(STATE, "quests", "active")];
+  for (const dir of dirs) {
+    let files: string[];
+    try { files = readdirSync(dir).filter(f => f.endsWith(".log.json")); } catch { continue; }
+    for (const file of files) {
+      const logs = readJson<Array<{ timestamp?: string; action?: string }>>(join(dir, file));
+      if (!logs) continue;
+      for (const entry of logs) {
+        if (since && entry.timestamp && entry.timestamp < since) continue;
+        const action = entry.action ?? "unknown";
+        counts[action] = (counts[action] ?? 0) + 1;
+      }
+    }
+  }
+  return counts;
+}
+
+app.get("/api/metrics", (_req, res) => {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const weekStart = new Date(now.getTime() - 7 * 86_400_000).toISOString();
+  const monthStart = new Date(now.getTime() - 30 * 86_400_000).toISOString();
+
+  const periods: Record<string, { since: string | null }> = {
+    today: { since: todayStart },
+    week: { since: weekStart },
+    month: { since: monthStart },
+    all: { since: null },
+  };
+
+  const result: Record<string, unknown> = {};
+  for (const [name, { since }] of Object.entries(periods)) {
+    const metrics = db.getMetrics(since);
+    const actions = countQuestActions(since);
+    result[name] = {
+      ...metrics,
+      messagesSent: actions["message_sent"] ?? 0,
+      prsCreated: actions["pr_created"] ?? 0,
+      commitsPushed: actions["commit_pushed"] ?? 0,
+      actions,
+    };
+  }
+
+  res.json({ periods: result, serverTime: now.toISOString() });
 });
 
 app.get("/", (_req, res) => res.sendFile(join(__dirname, "index.html")));
@@ -294,28 +337,38 @@ function slog(msg: string): void {
 
 // ── Slack bot client for reactions ────────────────────────────────────────────
 
-function getAuthorizedUserIds(): Set<string> {
-  try {
-    const settings = JSON.parse(readFileSync(join(STATE, "settings.json"), "utf8"));
-    return new Set((settings.authorized_users ?? []).map((u: { slack_user_id: string }) => u.slack_user_id));
-  } catch { return new Set(); }
-}
-
 let botClient: WebClient | null = null;
 if (existsSync(BOT_TOKEN_FILE)) {
   botClient = new WebClient(readFileSync(BOT_TOKEN_FILE, "utf8").trim());
 }
 
-async function reactIfAuthorized(event: Record<string, unknown>): Promise<void> {
+async function reactIfAllowed(event: Record<string, unknown>): Promise<void> {
   if (!botClient) return;
   const userId = event.user as string | undefined;
-  if (!userId || !getAuthorizedUserIds().has(userId)) return;
+  if (!userId) return;
+
   const channel = event.channel as string | undefined;
+  const channelType = (event.channel_type as string) ?? "channel";
   const ts = (event.event_ts ?? event.ts) as string | undefined;
   if (!channel || !ts) return;
+
+  // Build authorization context from settings
+  let ownerId: string | undefined;
+  let authorizedIds = new Set<string>();
+  try {
+    const settings = JSON.parse(readFileSync(join(STATE, "settings.json"), "utf8"));
+    ownerId = settings.owner_user_id ?? settings.user_profile?.slack_user_id;
+    authorizedIds = new Set((settings.authorized_users ?? []).map((u: { slack_user_id: string }) => u.slack_user_id));
+  } catch { /* fall through with empty sets */ }
+
+  if (!ownerId) return;
+
+  const result = db.isAllowed(channel, channelType, userId, ownerId, authorizedIds);
+  if (!result.allowed) return;
+
   try {
     await botClient.reactions.add({ channel, name: "raccoon", timestamp: ts });
-    slog(`[react] 🦝 channel=${channel} ts=${ts}`);
+    slog(`[react] raccoon channel=${channel} ts=${ts}`);
   } catch (err: unknown) {
     const code = (err as { data?: { error?: string } })?.data?.error;
     if (code !== "already_reacted") slog(`[react] failed: ${code}`);
@@ -362,7 +415,7 @@ function handleSlackEvent(event: Record<string, unknown>): void {
 
   // React immediately — but not to Franklin's own outbound messages
   if (!text.includes("*Sent using*")) {
-    reactIfAuthorized(event).catch(() => {});
+    reactIfAllowed(event).catch(() => {});
   }
 }
 
