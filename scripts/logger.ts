@@ -18,7 +18,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
-const LOG_DIR = join(ROOT, "state", "logs");
+const LOG_DIR = join(ROOT, "state", "logs", "franklin");
 const LOG_FILE = join(LOG_DIR, "franklin.log");
 const RETENTION_DAYS = 7;
 

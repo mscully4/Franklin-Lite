@@ -7,7 +7,7 @@
  */
 
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, readdirSync, renameSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, createWriteStream } from "fs";
 import { join } from "path";
 import { openDb } from "./db.js";
 import { readJson, writeJson } from "./config.js";
@@ -99,16 +99,26 @@ export function spawnQuestAgent(task: DelegationTask): WorkerResult {
   const agentStatusFile = join(activeDir, `${questId}.agent.json`);
   writeJson(agentStatusFile, { status: "running", started_at: dispatchedAt, completed_at: null, result: null, error: null });
 
+  const questLogDir = join(ROOT, "state", "logs", "workers");
+  mkdirSync(questLogDir, { recursive: true });
+  const questLogFile = join(questLogDir, `${questId}.log`);
+  const logStream = createWriteStream(questLogFile, { flags: "w" });
+
   const child = spawn("claude",
     ["--dangerously-skip-permissions", "--print", "-p",
       `You are Franklin. Read state/quests/active/${questId}.json and execute the quest objective to completion. When done, write state/quests/active/${questId}.agent.json with status "completed" and a result summary.`],
-    { cwd: ROOT, stdio: "inherit", detached: false },
+    { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], detached: false },
   );
+
+  // Tee stdout/stderr to log file and console
+  if (child.stdout) child.stdout.on("data", (chunk: Buffer) => { process.stdout.write(chunk); logStream.write(chunk); });
+  if (child.stderr) child.stderr.on("data", (chunk: Buffer) => { process.stderr.write(chunk); logStream.write(chunk); });
 
   const pid = child.pid ?? 0;
   runningQuests.set(questId, { questId, taskId: task.id, pid, startedAt: dispatchedAt });
 
   child.on("close", () => {
+    logStream.end();
     runningQuests.delete(questId);
   });
 

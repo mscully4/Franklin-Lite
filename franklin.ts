@@ -12,7 +12,7 @@
  */
 
 import { spawn, spawnSync, execSync } from "child_process";
-import { existsSync, mkdirSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, createWriteStream } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "./scripts/db.js";
@@ -29,6 +29,7 @@ const LOCK_FILE = join(ROOT, "state", "franklin.lock");
 const DELEGATION_FILE = join(ROOT, "state", "delegation.json");
 const LAST_RUN_FILE = join(ROOT, "state", "last_run.json");
 const WORKER_RESULTS_DIR = join(ROOT, "state", "worker_results");
+const WORKER_LOGS_DIR = join(ROOT, "state", "logs", "workers");
 
 const CYCLE_INTERVAL_MS = 30 * 1000;
 const LOCK_STALE_MS = 3 * 60 * 1000;
@@ -411,10 +412,20 @@ function appendDispatchLog(entry: DispatchLogEntry): void {
 function spawnWithTimeout(
   args: string[],
   timeoutMs: number,
+  logFile?: string,
 ): Promise<{ exitCode: number | null; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn("claude", args, { cwd: ROOT, stdio: "inherit" });
+    const child = spawn("claude", args, { cwd: ROOT, stdio: logFile ? ["ignore", "pipe", "pipe"] : "inherit" });
     let timedOut = false;
+
+    // Tee stdout/stderr to a log file while keeping console output
+    if (logFile && child.stdout && child.stderr) {
+      mkdirSync(dirname(logFile), { recursive: true });
+      const stream = createWriteStream(logFile, { flags: "w" });
+      child.stdout.on("data", (chunk: Buffer) => { process.stdout.write(chunk); stream.write(chunk); });
+      child.stderr.on("data", (chunk: Buffer) => { process.stderr.write(chunk); stream.write(chunk); });
+      child.on("close", () => stream.end());
+    }
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -483,10 +494,12 @@ async function runWorker(task: DelegationTask): Promise<WorkerResult | null> {
   log.info(` Spawning ${task.type} worker for ${task.id}...`);
   mkdirSync(WORKER_RESULTS_DIR, { recursive: true });
 
+  const workerLogFile = join(WORKER_LOGS_DIR, `${task.id}.log`);
   const { exitCode, timedOut } = await spawnWithTimeout(
     ["--dangerously-skip-permissions", "--print", "-p",
       `Read modes/worker_wrapper.md and execute. The task ID is ${task.id}.`],
     WORKER_TIMEOUT_MS,
+    workerLogFile,
   );
 
   const completedAt = new Date().toISOString();
