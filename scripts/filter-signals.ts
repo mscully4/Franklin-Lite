@@ -19,7 +19,8 @@
  * Usage: npx tsx scripts/filter-signals.ts
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync } from "fs";
+import { readJson } from "./config.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "./db.js";
@@ -28,6 +29,8 @@ const log = createLogger("filter");
 import type { GithubEntry } from "./scouts/github.js";
 import type { JiraEntry } from "./scouts/jira.js";
 import type { GmailEntry } from "./scouts/gmail.js";
+import { CHANNEL_SIGNAL_HANDLERS } from "./channel-signals.js";
+import type { ChannelEntry } from "./channel-signals.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -63,18 +66,11 @@ export function statesEqual(a: Record<string, unknown>, b: Record<string, unknow
 
 interface Signal {
   id: string;
-  source: "github" | "jira" | "gmail";
+  source: "github" | "jira" | "gmail" | "slack_deploy" | "slack_alert";
   is_new: boolean;                        // true = never surfaced before
   previous_state: Record<string, unknown>;
   current_state: Record<string, unknown>;
-  entry: GithubEntry | JiraEntry | GmailEntry;  // full entry for brain context
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function readJson<T>(path: string): T | null {
-  try { return JSON.parse(readFileSync(path, "utf8")) as T; }
-  catch { return null; }
+  entry: GithubEntry | JiraEntry | GmailEntry | ChannelEntry;  // full entry for brain context
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -156,19 +152,7 @@ if (gmailResult?.status === "ok" || gmailResult?.status === "error") {
   }
 }
 
-// ── Slack channels (ops alerts, deploy approvals) ────────────────────────────
-
-interface ChannelEntry {
-  id: string;
-  source: "ops_alert" | "deploy_approval";
-  ts: string;
-  channel: string;
-  author_id: string;
-  text: string;
-  permalink: string | null;
-  service: string | null;
-  deploy_description: string | null;
-}
+// ── Slack channels (ops alerts — still polled via scout) ────────────────────
 
 const channelResult = readJson<{ status: string; entries: ChannelEntry[] }>(
   join(ROOT, "state", "scout_results", "slack_channels.json")
@@ -184,25 +168,62 @@ if (channelResult?.status === "ok" || channelResult?.status === "error") {
         is_new: true,
         previous_state: {},
         current_state: { surfaced: true },
-        entry: entry as unknown as GithubEntry,
+        entry,
       });
     }
   }
 }
 
-writeFileSync(join(OUT_DIR, "signals.json"), JSON.stringify(signals, null, 2));
+// ── Slack inbox (Socket Mode) ─────────────────────────────────────────────
+// Partition pending events:
+//   1. Handler matches → signal (brain processes as quest/task)
+//   2. Known handler channel but no match → drop (noise that doesn't involve owner)
+//   3. No handler for channel → slack_inbox.json (DM task generation)
 
-// ── Slack inbox ───────────────────────────────────────────────────────────────
+const settings = readJson<{ owner_user_id?: string; user_profile?: { slack_user_id?: string } }>(
+  join(ROOT, "state", "settings.json")
+);
+const ownerUserId = settings?.owner_user_id ?? settings?.user_profile?.slack_user_id ?? "";
 
 const pendingEvents = db.getPendingSlackEvents();
+const handlerChannels = new Set(CHANNEL_SIGNAL_HANDLERS.map((h) => h.channel));
+const inboxEvents: typeof pendingEvents = [];
+let channelSignalCount = 0;
+
+for (const event of pendingEvents) {
+  const handler = CHANNEL_SIGNAL_HANDLERS.find(
+    (h) => h.channel === event.channel && h.matches(event, ownerUserId),
+  );
+  if (handler) {
+    const entry = handler.toEntry(event);
+    const row = db.getSurfaced(entry.id);
+    if (!row || !row.last_surfaced_at) {
+      signals.push({
+        id: entry.id,
+        source: handler.signalSource as Signal["source"],
+        is_new: true,
+        previous_state: {},
+        current_state: { surfaced: true },
+        entry,
+      });
+      channelSignalCount++;
+    }
+  } else if (!handlerChannels.has(event.channel)) {
+    inboxEvents.push(event);
+  }
+  // else: known handler channel but criteria not met → drop silently
+}
+
 if (pendingEvents.length > 0) {
   db.markSlackEventsProcessed(pendingEvents.map((e) => e.event_ts));
 }
-writeFileSync(join(OUT_DIR, "slack_inbox.json"), JSON.stringify(pendingEvents, null, 2));
+
+writeFileSync(join(OUT_DIR, "signals.json"), JSON.stringify(signals, null, 2));
+writeFileSync(join(OUT_DIR, "slack_inbox.json"), JSON.stringify(inboxEvents, null, 2));
 
 db.close();
 
 log.info(
-  `${signals.length} changed signals (github/jira), ` +
-  `${pendingEvents.length} slack inbox events → ${OUT_DIR}`
+  `${signals.length} changed signals (${channelSignalCount} from socket channels), ` +
+  `${inboxEvents.length} slack inbox events → ${OUT_DIR}`
 );

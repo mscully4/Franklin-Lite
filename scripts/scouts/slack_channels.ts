@@ -1,10 +1,12 @@
 #!/usr/bin/env npx tsx
 /**
- * Slack channels scout — polls hard-coded channels that socket mode can't reach.
+ * Slack channels scout — polls channels that need API-based history reads.
  *
  * Channels:
  *   - #warn-developer-services (C03GX4SM7RN) — ops alerts, filtered to team services
- *   - #deploy-bot (CTDAN6570) — deploy approvals where user is tagged
+ *
+ * Note: #deploy-bot is handled via Socket Mode → channel signal handlers
+ * (see scripts/channel-signals.ts).
  *
  * Writes results to state/scout_results/slack_channels.json and upserts to franklin.db.
  *
@@ -13,10 +15,12 @@
 
 import { WebClient, ErrorCode } from "@slack/web-api";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readJson } from "../config.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "../db.js";
 import { createLogger } from "../logger.js";
+import { matchesTeamService } from "../channel-signals.js";
 const log = createLogger("slack_channels");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -29,16 +33,6 @@ const CLIENT_SECRET_FILE = join(SECRETS_DIR, "franklin_client_secret.txt");
 const CLIENT_ID = "1601185624273.8899143856786";
 
 const WARN_CHANNEL = "C03GX4SM7RN";       // #warn-developer-services
-const DEPLOY_CHANNEL = "CTDAN6570";        // #deploy-bot
-
-// Services owned by the team — alerts mentioning these are relevant
-const TEAM_SERVICES = [
-  "credits-manager",
-  "developer-dashboard-service",
-  "entitlement-service",
-  "platform-notifications",
-  "wallets-api",
-];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,21 +99,6 @@ async function getClient(): Promise<WebClient> {
   return client;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function readJson<T>(path: string): T | null {
-  try { return JSON.parse(readFileSync(path, "utf8")) as T; }
-  catch { return null; }
-}
-
-function matchesTeamService(text: string): string | null {
-  const lower = text.toLowerCase();
-  for (const svc of TEAM_SERVICES) {
-    if (lower.includes(svc)) return svc;
-  }
-  return null;
-}
-
 // ── Channel pollers ─────────────────────────────────────────────────────────
 
 async function pollWarnChannel(
@@ -156,42 +135,6 @@ async function pollWarnChannel(
   return entries;
 }
 
-async function pollDeployChannel(
-  client: WebClient,
-  userId: string,
-  lastTs: string,
-  errors: string[],
-): Promise<ChannelEntry[]> {
-  const entries: ChannelEntry[] = [];
-  try {
-    const resp = await client.conversations.history({
-      channel: DEPLOY_CHANNEL,
-      oldest: lastTs,
-      limit: 50,
-    });
-    for (const msg of (resp.messages as SlackMessage[]) ?? []) {
-      const text = (msg.text as string) ?? "";
-      // Only care about messages where the user is tagged
-      if (!text.includes(`<@${userId}>`)) continue;
-      const service = matchesTeamService(text);
-      entries.push({
-        id: `slack:deploy_approval:${DEPLOY_CHANNEL}/${msg.ts as string}`,
-        source: "deploy_approval",
-        ts: msg.ts as string,
-        channel: DEPLOY_CHANNEL,
-        author_id: (msg.user as string) ?? (msg.bot_id as string) ?? "unknown",
-        text,
-        permalink: null,
-        service,
-        deploy_description: text.slice(0, 500),
-      });
-    }
-  } catch (e: unknown) {
-    errors.push(`deploy_channel: ${(e as Error).message?.slice(0, 150)}`);
-  }
-  return entries;
-}
-
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -201,10 +144,6 @@ async function main() {
   const lastRun = readJson<{ scout_last_run?: Record<string, string> }>(
     join(ROOT, "state", "last_run.json"),
   );
-  const settings = readJson<{ user_profile?: { slack_user_id?: string } }>(
-    join(ROOT, "state", "settings.json"),
-  );
-  const userId = settings?.user_profile?.slack_user_id ?? "";
 
   // Use last scout run time as cursor, fall back to 1h ago
   const lastScoutTs = lastRun?.scout_last_run?.slack_channels;
@@ -228,7 +167,6 @@ async function main() {
   }
 
   add(await pollWarnChannel(client, lastTs, errors));
-  add(await pollDeployChannel(client, userId, lastTs, errors));
 
   allEntries.sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts));
 
