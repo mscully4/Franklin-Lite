@@ -41,6 +41,11 @@
     }
     header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; }
     header h1 img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); }
+    #header-metrics { display: flex; align-items: center; gap: 16px; }
+    .hm { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+    .hm-emoji { font-size: 14px; }
+    .hm-val { font-weight: 700; }
+    .hm-week { color: var(--muted); font-size: 10px; }
     #refresh { font-size: 11px; color: var(--muted); }
 
     .layout {
@@ -157,6 +162,41 @@
     .empty { color: var(--muted); font-style: italic; font-size: 12px; }
     a { color: var(--blue); text-decoration: none; }
     a:hover { text-decoration: underline; }
+
+    .kanban { display: flex; gap: 8px; overflow-x: auto; }
+    .kanban-col { flex: 1; min-width: 140px; }
+    .kanban-header {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--muted); font-weight: 600; margin-bottom: 6px;
+      display: flex; align-items: center; gap: 5px;
+    }
+    .kanban-header .tag { font-size: 9px; }
+    .kanban-card {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      margin-bottom: 6px;
+      background: var(--bg);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .kanban-card:hover { border-color: var(--muted); }
+    .kanban-card-key { font-weight: 600; }
+    .kanban-card-summary {
+      color: var(--text); margin-top: 2px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .kanban-card-meta { color: var(--muted); font-size: 10px; margin-top: 3px; }
+    .kanban-col--blue .kanban-card { border-left: 2px solid var(--blue); }
+    .kanban-col--purple .kanban-card { border-left: 2px solid var(--purple); }
+    .kanban-col--cyan .kanban-card { border-left: 2px solid var(--cyan); }
+    .kanban-col--yellow .kanban-card { border-left: 2px solid var(--yellow); }
+
+    .metric-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 3px 0; font-size: 12px;
+    }
+    .metric-val { font-weight: 700; }
     @keyframes fadein { from { opacity: 0.4; } to { opacity: 1; } }
     .flash { animation: fadein 0.4s ease; }
 
@@ -211,6 +251,7 @@
 <body>
   <header>
     <h1><img src="/avatar.png" alt="Franklin">Franklin</h1>
+    <div id="header-metrics"></div>
     <div id="refresh">loading...</div>
   </header>
 
@@ -248,14 +289,13 @@
     function showDeployModal(idx) {
       const dep = window.__deploys[idx];
       if (!dep) return;
-      const DEPLOY_REC = {
-        safe:    { icon: '\u2705', cls: 'tag-green' },
-        hold:    { icon: '\u26a0\ufe0f', cls: 'tag-yellow' },
-        neutral: { icon: '\u2753', cls: 'tag-blue' },
+      const DEPLOY_ST = {
+        pending:  { icon: '🔶', cls: 'tag-yellow' },
+        approved: { icon: '✅', cls: 'tag-green' },
       };
-      const r = DEPLOY_REC[dep.recommendation] ?? DEPLOY_REC.neutral;
+      const r = DEPLOY_ST[dep.status] ?? DEPLOY_ST.pending;
       document.getElementById('deploy-modal-title').innerHTML =
-        `${r.icon} ${esc(dep.service)} <span class="tag ${r.cls}" style="margin-left:8px">${esc(dep.recommendation ?? 'neutral')}</span>`;
+        `${r.icon} ${esc(dep.service)} <span class="tag ${r.cls}" style="margin-left:8px">${esc(dep.status ?? 'pending')}</span>`;
 
       let body = '';
 
@@ -369,21 +409,20 @@
       }).join('');
 
       // Deploys
-      const DEPLOY_REC = {
-        safe:    { icon: '\u2705', cls: 'tag-green' },
-        hold:    { icon: '\u26a0\ufe0f', cls: 'tag-yellow' },
-        neutral: { icon: '\u2753', cls: 'tag-blue' },
+      const DEPLOY_STATUS = {
+        pending:  { icon: '🔶', cls: 'tag-yellow' },
+        approved: { icon: '✅', cls: 'tag-green' },
       };
       // Store deploy data for modal access
       window.__deploys = d.deploys ?? [];
       const deployRows = (d.deploys ?? []).map((dep, i) => {
-        const r = DEPLOY_REC[dep.recommendation] ?? DEPLOY_REC.neutral;
+        const s = DEPLOY_STATUS[dep.status] ?? DEPLOY_STATUS.pending;
         const hasDetail = dep.evidence || dep.description;
         return `
           <div class="side-row" style="font-size:11px${hasDetail ? ';cursor:pointer' : ''}" ${hasDetail ? `onclick="showDeployModal(${i})"` : ''}>
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <span>${r.icon} ${esc(dep.service)}</span>
-              <span class="tag ${r.cls}">${esc(dep.recommendation ?? 'neutral')}</span>
+              <span>${s.icon} ${esc(dep.service)}</span>
+              <span class="tag ${s.cls}">${esc(dep.status ?? 'pending')}</span>
             </div>
             <div class="side-muted">${esc(dep.requester ?? '')} &middot; ${esc(dep.createdAgo)}</div>
           </div>
@@ -508,39 +547,39 @@
     }
 
     function renderJiraTickets(d) {
-      const JIRA_STATUS = {
-        'In Progress':  { icon: '🔨', cls: 'tag-blue' },
-        'In Review':    { icon: '👀', cls: 'tag-purple' },
-        'IN TESTING':   { icon: '🧪', cls: 'tag-cyan' },
-        'Backlog':      { icon: '📋', cls: 'tag-yellow' },
-      };
+      const COLS = [
+        { status: 'In Progress', icon: '🔨', cls: 'kanban-col--blue', tagCls: 'tag-blue' },
+        { status: 'In Review',   icon: '👀', cls: 'kanban-col--purple', tagCls: 'tag-purple' },
+        { status: 'IN TESTING',  icon: '🧪', cls: 'kanban-col--cyan', tagCls: 'tag-cyan' },
+        { status: 'Backlog',     icon: '📋', cls: 'kanban-col--yellow', tagCls: 'tag-yellow' },
+      ];
       const tickets = d.jiraTickets ?? [];
       if (!tickets.length) return '<div class="empty">No active tickets</div>';
 
-      let currentStatus = '';
-      return tickets.map(t => {
-        const s = JIRA_STATUS[t.status] ?? { icon: '❓', cls: 'tag-blue' };
-        const divider = t.status !== currentStatus
-          ? `<div style="color:var(--muted);font-size:10px;letter-spacing:0.5px;text-transform:uppercase;margin-top:${currentStatus ? '10px' : '0'};margin-bottom:4px">${s.icon} ${esc(t.status)}</div>`
-          : '';
-        currentStatus = t.status;
-        const commentHint = t.lastComment
-          ? `<div class="side-muted">💬 ${esc(t.lastComment.author)} ${esc(t.lastComment.ago)}: ${esc(t.lastComment.body)}</div>`
-          : '';
-        return `
-          ${divider}
-          <div class="dispatch-row">
-            <div class="dispatch-header">
-              <span>
-                <a href="https://circlepay.atlassian.net/browse/${esc(t.key)}" target="_blank" style="color:var(--blue)">${esc(t.key)}</a>
-              </span>
-              <span style="color:var(--muted);font-size:11px">${esc(t.updatedAgo)}</span>
+      const groups = {};
+      for (const t of tickets) groups[t.status] = (groups[t.status] ?? []).concat(t);
+
+      return '<div class="kanban">' + COLS.map(c => {
+        const items = groups[c.status] ?? [];
+        const cards = items.map(t => {
+          const comment = t.lastComment
+            ? `<div class="kanban-card-meta">💬 ${esc(t.lastComment.author)}: ${esc(t.lastComment.body)}</div>`
+            : '';
+          return `
+            <div class="kanban-card">
+              <div><a href="https://circlepay.atlassian.net/browse/${esc(t.key)}" target="_blank" class="kanban-card-key" style="color:var(--blue)">${esc(t.key)}</a> <span class="kanban-card-meta">${esc(t.updatedAgo)}</span></div>
+              <div class="kanban-card-summary">${esc(t.summary)}</div>
+              ${comment}
             </div>
-            <div class="dispatch-summary">${esc(t.summary)}</div>
-            ${commentHint}
+          `;
+        }).join('');
+        return `
+          <div class="kanban-col ${c.cls}">
+            <div class="kanban-header">${c.icon} ${esc(c.status)} <span class="tag ${c.tagCls}">${items.length}</span></div>
+            ${cards}
           </div>
         `;
-      }).join('');
+      }).join('') + '</div>';
     }
 
     function renderRight(d) {
@@ -588,7 +627,7 @@
               <span style="display:flex;gap:4px">${kindTag}<span class="tag tag-purple">${esc(t.every)}</span></span>
             </div>
             <div class="${detailClass}">
-              <div class="side-muted">${esc(t.objective)}</div>
+              <div class="side-muted">${esc(t.description)}</div>
               <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
             </div>
           </div>
@@ -639,8 +678,45 @@
       if (e.key === 'Escape') document.getElementById('deploy-modal').classList.remove('open');
     });
 
+    // ── Metrics widget ──────────────────────────────────────────────────────
+    let metricsCache = null;
+
+    async function fetchMetrics() {
+      try {
+        metricsCache = await fetch('/api/metrics').then(r => r.json());
+        renderHeaderMetrics();
+      } catch {}
+    }
+
+    function renderHeaderMetrics() {
+      const el = document.getElementById('header-metrics');
+      if (!metricsCache) { el.innerHTML = ''; return; }
+      const all = metricsCache.periods.all;
+      const week = metricsCache.periods.week;
+      if (!all) { el.innerHTML = ''; return; }
+
+      const items = [
+        { emoji: '✅', label: 'Tasks completed', val: all.tasks, weekVal: week?.tasks, color: 'var(--green)' },
+        { emoji: '🗡️', label: 'Quests completed', val: all.quests, weekVal: week?.quests, color: 'var(--purple)' },
+        { emoji: '💬', label: 'Messages sent', val: all.messagesSent, weekVal: week?.messagesSent, color: 'var(--cyan)' },
+        { emoji: '🚀', label: 'Deploys reviewed', val: all.deploys, weekVal: week?.deploys, color: 'var(--blue)' },
+      ];
+
+      el.innerHTML = items.map(m => {
+        const tip = `${m.label}: ${m.val} total` + (m.weekVal ? `, ${m.weekVal} this week` : '');
+        return `
+          <div class="hm" title="${tip}">
+            <span class="hm-emoji">${m.emoji}</span>
+            <span class="hm-val" style="color:${m.color}">${m.val}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
     refresh();
+    fetchMetrics();
     setInterval(refresh, 10000);
+    setInterval(fetchMetrics, 60000);
   </script>
 </body>
 </html>

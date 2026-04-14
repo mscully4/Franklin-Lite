@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Calendar scout — fetches today's and tomorrow's events via gws CLI.
+ * Calendar scout — fetches today's events via gws CLI.
  * Writes results to state/scout_results/calendar.json.
  *
  * Tracks events by ID. State in franklin.db:
@@ -191,8 +191,8 @@ function main(): void {
   const entries: CalendarEntry[] = [];
   const seen = new Set<string>();
 
-  // Fetch today + tomorrow
-  for (const flag of ["--today", "--tomorrow"]) {
+  // Fetch today only
+  for (const flag of ["--today"]) {
     // Get meeting URLs from raw API (hangoutLink, conferenceData)
     const rawUrls = fetchMeetingUrls(flag, errors);
 

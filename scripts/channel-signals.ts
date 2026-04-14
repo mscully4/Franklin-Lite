@@ -64,28 +64,7 @@ export function matchesTeamService(text: string): string | null {
 }
 
 // ── Handler registry ────────────────────────────────────────────────────────
+// Deploy-bot is now handled by the deploy_poll scout (state-based polling)
+// rather than Socket Mode events. This registry is for future channel handlers.
 
-const DEPLOY_CHANNEL = "CTDAN6570"; // #deploy-bot
-
-export const CHANNEL_SIGNAL_HANDLERS: ChannelSignalHandler[] = [
-  {
-    channel: DEPLOY_CHANNEL,
-    signalSource: "slack_deploy",
-    matches: (event, ownerUserId) =>
-      event.type === "message" && (event.text ?? "").includes(`<@${ownerUserId}>`),
-    toEntry: (event) => {
-      const text = event.text ?? "";
-      return {
-        id: `slack:deploy_approval:${DEPLOY_CHANNEL}/${event.event_ts}`,
-        source: "deploy_approval",
-        ts: event.event_ts,
-        channel: DEPLOY_CHANNEL,
-        author_id: event.user_id ?? "unknown",
-        text,
-        permalink: null,
-        service: matchesTeamService(text),
-        deploy_description: text.slice(0, 500),
-      };
-    },
-  },
-];
+export const CHANNEL_SIGNAL_HANDLERS: ChannelSignalHandler[] = [];

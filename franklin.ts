@@ -124,6 +124,7 @@ const HEALTH_PROBES: Record<string, { cmd: string; label: string }> = {
   gmail:          { cmd: "which gws",                                               label: "Gmail (gws CLI)" },
   calendar:       { cmd: "which gws",                                               label: "Calendar (gws CLI)" },
   slack_channels: { cmd: `test -f ${join(ROOT, "secrets", "franklin_user_oauth_token.txt")}`, label: "Slack OAuth token" },
+  deploy_poll:    { cmd: `test -f ${join(ROOT, "secrets", "franklin_user_oauth_token.txt")}`, label: "Slack OAuth token (deploys)" },
 };
 
 function runStartupChecks(enabledScouts: string[]): void {
@@ -243,7 +244,8 @@ function generateDmTasks(): DelegationTask[] {
     const textMentionsFranklin = (event.text ?? "").includes(`<@${FRANKLIN_BOT_USER_ID}>`);
 
     if (result.triggerMode === "none") continue;
-    if (result.triggerMode === "mention" && !isAppMention && !isReaction && !textMentionsFranklin) continue;
+    const isWhiskeyReaction = isReaction && event.reaction === "whiskey";
+    if (result.triggerMode === "mention" && !isAppMention && !isWhiskeyReaction && !textMentionsFranklin) continue;
     // triggerMode === "all" falls through — process everything
 
     const isDm = event.channel_type === "im";
@@ -322,7 +324,11 @@ function generateScheduledTasks(): DelegationTask[] {
   const scheduled = readJsonWithSchema(SCHEDULED_TASKS_FILE, z.array(ScheduledTaskSchema)) ?? [];
   if (!scheduled.length) return [];
 
+  // Use owner's timezone for day-of-week and "today" calculations.
+  // System is UTC, but scheduled tasks should respect the user's local time.
+  const ownerTz = readJson<{ timezone?: string; user_profile?: { timezone?: string } }>(SETTINGS_FILE)?.timezone ?? "America/Chicago";
   const now = new Date();
+  const nowLocal = new Date(now.toLocaleString("en-US", { timeZone: ownerTz }));
   const tasks: DelegationTask[] = [];
   let changed = false;
 
@@ -334,15 +340,15 @@ function generateScheduledTasks(): DelegationTask[] {
     }
 
     if (parsed.weekdaysOnly) {
-      const day = now.getDay();
+      const day = nowLocal.getDay();
       if (day === 0 || day === 6) continue;
     }
 
     if (parsed.dailyOnce) {
-      // Fire once per day — skip if already ran today (local time)
-      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      const lastRunLocal = job.last_run ? new Date(job.last_run) : null;
-      const lastRunDay = lastRunLocal ? `${lastRunLocal.getFullYear()}-${String(lastRunLocal.getMonth() + 1).padStart(2, "0")}-${String(lastRunLocal.getDate()).padStart(2, "0")}` : null;
+      // Fire once per day — skip if already ran today (owner's local time)
+      const today = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, "0")}-${String(nowLocal.getDate()).padStart(2, "0")}`;
+      const lastRunInTz = job.last_run ? new Date(new Date(job.last_run).toLocaleString("en-US", { timeZone: ownerTz })) : null;
+      const lastRunDay = lastRunInTz ? `${lastRunInTz.getFullYear()}-${String(lastRunInTz.getMonth() + 1).padStart(2, "0")}-${String(lastRunInTz.getDate()).padStart(2, "0")}` : null;
       if (lastRunDay === today) continue;
     } else {
       // Interval-based — due if never run, or interval has elapsed

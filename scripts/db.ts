@@ -92,6 +92,7 @@ const SCHEMA = `
     recommendation  TEXT,
     evidence        TEXT,
     message_url     TEXT UNIQUE,
+    status          TEXT NOT NULL DEFAULT 'pending',
     created_at      TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS deploys_created ON deploys(created_at);
@@ -139,6 +140,12 @@ export function openDb(path = DB_PATH) {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.exec(SCHEMA);
+
+  // Migration: add status column to deploys if missing
+  const deployCols = db.pragma("table_info(deploys)") as Array<{ name: string }>;
+  if (!deployCols.some((c) => c.name === "status")) {
+    db.exec(`ALTER TABLE deploys ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`);
+  }
 
   // Seed default channel policies if the table is empty
   const policyCount = (db.prepare("SELECT COUNT(*) as cnt FROM channel_policies").get() as { cnt: number }).cnt;
@@ -524,6 +531,40 @@ export function openDb(path = DB_PATH) {
       `).run(entry.id, entry.service, entry.description ?? null, entry.requester ?? null, entry.recommendation ?? null, entry.evidence ?? null, entry.message_url ?? null, now);
     },
 
+    /**
+     * Insert a deploy only if its ID doesn't already exist (preserves recommendation/evidence).
+     * Updates status on existing entries.
+     */
+    upsertDeployIfNew(entry: {
+      id: string;
+      service: string;
+      description?: string;
+      requester?: string;
+      status?: string;
+      message_url?: string;
+      created_at?: string;
+    }): void {
+      const now = entry.created_at ?? new Date().toISOString();
+      db.prepare(`
+        INSERT INTO deploys (id, service, description, requester, status, message_url, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET status = excluded.status
+      `).run(entry.id, entry.service, entry.description ?? null, entry.requester ?? null, entry.status ?? "pending", entry.message_url ?? null, now);
+    },
+
+    /**
+     * Remove deploys whose ID is not in the given active set.
+     */
+    removeDeploysNotIn(activeIds: string[]): number {
+      if (!activeIds.length) {
+        const result = db.prepare(`DELETE FROM deploys`).run();
+        return result.changes;
+      }
+      const placeholders = activeIds.map(() => "?").join(",");
+      const result = db.prepare(`DELETE FROM deploys WHERE id NOT IN (${placeholders})`).run(...activeIds);
+      return result.changes;
+    },
+
     getRecentDeploys(limit = 10): Array<{
       id: string;
       service: string;
@@ -532,6 +573,7 @@ export function openDb(path = DB_PATH) {
       recommendation: string | null;
       evidence: string | null;
       message_url: string | null;
+      status: string;
       created_at: string;
     }> {
       return db.prepare(`SELECT * FROM deploys ORDER BY created_at DESC LIMIT ?`).all(limit) as ReturnType<typeof this.getRecentDeploys>;

@@ -93,16 +93,16 @@ app.get("/api/state", (_req, res) => {
     .slice(-5)
     .reverse();
 
-  // Calendar
+  // Calendar — use timezone from settings for consistent date comparisons
   const calendar = readJson<{ events?: Array<{ title: string; start: string; end: string; notified?: boolean; location?: string; meetingUrl?: string; transcript_available?: boolean }> }>(join(STATE, "calendar.json"));
   const now = Date.now();
-  const nowDate = new Date();
-  const today = `${nowDate.getFullYear()}-${String(nowDate.getMonth() + 1).padStart(2, "0")}-${String(nowDate.getDate()).padStart(2, "0")}`;
+  const userSettings = readJson<{ timezone?: string }>(join(STATE, "settings.json"));
+  const tz = userSettings?.timezone ?? "America/Chicago";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz }); // YYYY-MM-DD
   const meetings = (calendar?.events ?? [])
     .filter((e) => e.start.includes("T")) // skip all-day events
     .filter((e) => {
-      const d = new Date(e.start);
-      const eventDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const eventDay = new Date(e.start).toLocaleDateString("en-CA", { timeZone: tz });
       return eventDay === today;
     })
     .filter((e) => new Date(e.start).getTime() > now - 30 * 60_000) // include meetings started <30min ago
@@ -127,8 +127,8 @@ app.get("/api/state", (_req, res) => {
   }));
 
   // Scheduled tasks
-  const scheduledTasks = (readJson<Array<{ id: string; every: string; kind?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
-    .map((t) => ({ id: t.id, every: t.every, kind: t.kind ?? "worker", objective: t.context?.objective ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
+  const scheduledTasks = (readJson<Array<{ id: string; every: string; kind?: string; display_description?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
+    .map((t) => ({ id: t.id, every: t.every, kind: t.kind ?? "worker", description: t.display_description ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
 
   // Open PRs from GitHub scout
   interface GhScoutEntry { id: string; type: string; title: string; url: string; repo: string; number: number; updated_at: string; raw: Record<string, unknown> }
@@ -258,7 +258,10 @@ function countQuestActions(since: string | null): Record<string, number> {
 
 app.get("/api/metrics", (_req, res) => {
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const metricsSettings = readJson<{ timezone?: string }>(join(STATE, "settings.json"));
+  const mtz = metricsSettings?.timezone ?? "America/Chicago";
+  const todayStr = now.toLocaleDateString("en-CA", { timeZone: mtz }); // YYYY-MM-DD in user tz
+  const todayStart = new Date(todayStr + "T00:00:00").toISOString();
   const weekStart = new Date(now.getTime() - 7 * 86_400_000).toISOString();
   const monthStart = new Date(now.getTime() - 30 * 86_400_000).toISOString();
 
@@ -365,6 +368,15 @@ async function reactIfAllowed(event: Record<string, unknown>): Promise<void> {
 
   const result = db.isAllowed(channel, channelType, userId, ownerId, authorizedIds);
   if (!result.allowed) return;
+
+  // Respect trigger mode: only react to @mentions unless policy is "all"
+  if (result.triggerMode === "mention") {
+    const eventType = event.type as string;
+    const isDM = channelType === "im";
+    const isAppMention = eventType === "app_mention";
+    const isWhiskey = eventType === "reaction_added" && event.reaction === "whiskey";
+    if (!isDM && !isAppMention && !isWhiskey) return;
+  }
 
   try {
     await botClient.reactions.add({ channel, name: "raccoon", timestamp: ts });

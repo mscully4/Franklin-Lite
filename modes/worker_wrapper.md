@@ -17,13 +17,15 @@ Scheduled tasks have two kinds:
 
 **Worker tasks** (default) — spawn a Claude worker with LLM reasoning:
 ```json
-{ "id": "unique-id", "every": "<frequency>", "type": "scheduled", "priority": "normal", "context": { "objective": "..." } }
+{ "id": "unique-id", "every": "<frequency>", "type": "scheduled", "priority": "normal", "display_description": "Short UI label", "context": { "objective": "Full instructions for the worker..." } }
 ```
 
 **Script tasks** — run a shell command directly, no LLM involved:
 ```json
-{ "id": "unique-id", "every": "<frequency>", "type": "scheduled", "priority": "low", "kind": "script", "command": "npx tsx scripts/foo.ts", "timeout": 30000, "context": { "objective": "description for logs" } }
+{ "id": "unique-id", "every": "<frequency>", "type": "scheduled", "priority": "low", "kind": "script", "command": "npx tsx scripts/foo.ts", "timeout": 30000, "display_description": "Short UI label", "context": { "objective": "description for logs" } }
 ```
+
+Fields: `display_description` is the short human-readable label shown on the dashboard. `context.objective` is the full prompt/instructions passed to the worker.
 
 Use `kind: "script"` for simple, deterministic tasks (cleanup, pruning, health checks with no reasoning needed). Use worker (default) when the task requires judgment, reading context, or interacting conversationally.
 
@@ -44,13 +46,15 @@ Valid `every` values:
 
 ## Step 1a — Load conversation history
 
-If your task has a `thread_ts` and `channel`, read the full thread before doing anything:
+If your task context has a `thread_context` field, **read it first** — it contains the full thread (parent message + all replies) pre-fetched at dispatch time. This is your primary source of context for understanding what the user is asking. The `text` field only contains the single message that triggered the task, which may be a bare "yes" or "do that one" with no context.
+
+If `thread_context` is present, you usually don't need to fetch the thread again. Only call `slack_read_thread` if you need to see messages that arrived *after* the task was dispatched.
+
+If `thread_context` is null but `thread_ts` is set, fall back to fetching the thread:
 
 ```
 mcp__slack__slack_read_thread(channel_id=<channel>, message_ts=<thread_ts>)
 ```
-
-This gives you the full conversation — what the user originally asked, what Franklin said, and the latest reply. Without this, you'll only see the most recent message which may be a bare "yes" or "do that one" with no context.
 
 Skip this for tasks with no `thread_ts` (scheduled tasks, signal-based tasks).
 
@@ -139,6 +143,18 @@ If your task type is `pr_monitor`, your job is to **get the PR back to a reviewa
 
 ## Step 2 — Execute
 
+### Implementation discipline
+
+These rules apply to all code changes, regardless of task type:
+
+1. **Simplicity guardrails** — Don't add features, refactors, or "improvements" beyond what was asked. No abstractions for single-use code. No error handling for scenarios that can't happen. No speculative configurability. If 200 lines could be 50, rewrite it. The right amount of complexity is what the task actually requires.
+
+2. **Surgical changes** — Every changed line should trace directly to the user's request. Don't improve adjacent code. Don't add docstrings or type annotations to code you didn't change. Match existing style even if you'd do it differently. Only remove what your changes orphaned. A clean diff is a reviewable diff.
+
+3. **State assumptions** — Before implementing, state your assumptions. If multiple interpretations exist, present them — don't pick silently. This applies at every phase: planning, implementation, even when replying to a DM that could mean two things. An upfront question is always cheaper than a wrong guess.
+
+---
+
 You have two kinds of tools:
 
 ### MCP tools (use directly)
@@ -156,6 +172,7 @@ To use a playbook: read it and follow the phases that apply to your task.
 |----------|-------------|
 | `DevWorkflow.md` | Any dev task: ticket → plan → implement → PR → CI babysit → cleanup |
 | `JiraWorkflow.md` | Jira ticket transitions: when to move between lanes, evidence requirements |
+| `DeployApproval.md` | Deploy approval quests: verify staging health, DM recommendation with evidence |
 
 ### Skills library
 
