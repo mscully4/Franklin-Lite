@@ -4,9 +4,9 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
-import { openDb } from "./scripts/db.js";
-import { SCOUT_INTERVALS_MS, readJson } from "./scripts/config.js";
-import { createLogger } from "./scripts/logger.js";
+import { openDb } from "./src/db.js";
+import { SCOUT_INTERVALS_MS, readJson } from "./src/config.js";
+import { createLogger } from "./src/logger.js";
 const log = createLogger("server");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -79,18 +79,30 @@ app.get("/api/state", (_req, res) => {
       prUrl: quest.pr_url ?? null,
       recentLogs,
       logCount: logs.length,
+      raw: quest,
     };
   }).filter(Boolean);
 
   const completedDir = join(STATE, "quests", "completed");
+  const recentCutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
   const completedQuests = readQuestDir(completedDir)
     .map((file) => {
       const quest = readJson<Record<string, unknown>>(join(completedDir, file));
       if (!quest) return null;
-      return { id: quest.id, objective: ((quest.objective as string) ?? "").slice(0, 80), updatedAgo: timeAgo(quest.updated_at as string) };
+      const updatedAt = (quest.updated_at as string) ?? "";
+      if (updatedAt < recentCutoff) return null;
+      return {
+        id: quest.id,
+        objective: (quest.objective as string) ?? "",
+        outcome: (quest.outcome as string) ?? "",
+        updatedAgo: timeAgo(updatedAt),
+        prUrl: (quest.pr_url as string) ?? null,
+        status: quest.status,
+        raw: quest,
+      };
     })
     .filter(Boolean)
-    .slice(-5)
+    .slice(-10)
     .reverse();
 
   // Calendar — use timezone from settings for consistent date comparisons
@@ -114,11 +126,15 @@ app.get("/api/state", (_req, res) => {
   const socketStatus = socketData?.status ?? "unknown";
   const socketStale = isStale(socketData?.updated_at ?? null, 300);
 
-  // Active workers and recent dispatch history
-  const activeWorkersData = readJson<{ updated_at: string; workers: Array<{ task_id: string; type: string; priority: string; started_at: string }> }>(join(STATE, "active_workers.json"));
-  const activeWorkers = (activeWorkersData?.workers ?? []).map((w) => ({
-    ...w,
-    startedAgo: timeAgo(w.started_at),
+  // Active workers from running_tasks DB table
+  const activeWorkers = db.getRunningTasks().map((t) => ({
+    task_id: t.task_id,
+    type: t.type,
+    priority: t.priority,
+    started_at: t.dispatched_at,
+    startedAgo: timeAgo(t.dispatched_at),
+    timeout_ms: t.timeout_ms,
+    quest_id: t.quest_id,
   }));
 
   const recentDispatches = db.getRecentDispatches(20).map((r) => ({
@@ -143,13 +159,14 @@ app.get("/api/state", (_req, res) => {
       const approved = (r.approved as boolean) ?? false;
       const changesRequested = (r.changes_requested as string[]) ?? [];
       // Determine status label
-      let status = "ok";
+      let status = "awaiting review";
       if (ciFailing.length > 0) status = "ci_failing";
       else if (mergeableState === "dirty") status = "conflict";
       else if (mergeableState === "behind") status = "behind";
       else if (changesRequested.length > 0) status = "changes_requested";
       else if (approved && mergeableState === "clean") status = "ready";
-      else if (mergeableState === "blocked") status = "awaiting review";
+      else if (approved) status = "ok";
+      else if (mergeableState === "clean" || mergeableState === "blocked" || mergeableState === "unknown") status = "awaiting review";
       return {
         repo: e.repo.replace(`${GITHUB_ORG}/`, ""),
         number: e.number,
@@ -177,8 +194,9 @@ app.get("/api/state", (_req, res) => {
       updatedAgo: timeAgo(e.updated_at),
     }));
 
-  // Inflight PRs
-  const inflightPrs = db.getInflightPrs().map((p) => p.signal_id);
+  // Inflight signals (PRs and other active work)
+  const inflightSignals = readJson<string[]>(join(STATE, "brain_input", "inflight_signals.json")) ?? [];
+  const inflightPrs = inflightSignals.filter((s) => s.startsWith("github:pr:"));
 
   // Jira tickets from scout — current sprint only
   interface JiraScoutEntry { id: string; key: string; summary: string; status: string; priority: string; updated: string; labels: string[]; sprint: { name: string; state: string } | null; last_comment: { author: string; body: string; updated: string } | null }

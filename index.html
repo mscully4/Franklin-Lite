@@ -130,6 +130,23 @@
     .log-ago { color: var(--muted); margin-right: 5px; }
     .log-action { color: var(--orange); margin-right: 5px; }
 
+    .quest-completed-section { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+    .quest-completed-toggle { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; }
+    .quest-completed-toggle:hover { color: var(--text); }
+    .quest-card-completed {
+      border: 1px solid var(--border); border-radius: 5px; margin-bottom: 8px;
+      overflow: hidden; opacity: 0.55; transition: opacity 0.15s ease;
+    }
+    .quest-card-completed:hover { opacity: 0.85; }
+    .quest-card-completed .quest-head { padding: 5px 10px; }
+    .quest-detail {
+      padding: 4px 10px; font-size: 11px; color: var(--muted); cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4;
+      border-top: 1px solid var(--border);
+    }
+    .quest-detail.expanded { white-space: normal; }
+    .quest-detail-label { color: var(--purple); font-weight: 600; margin-right: 4px; }
+
     .dispatch-row {
       padding: 6px 0;
       border-bottom: 1px solid var(--border);
@@ -255,6 +272,16 @@
     <div id="refresh">loading...</div>
   </header>
 
+  <div class="modal-overlay" id="quest-modal" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal" style="max-width:600px">
+      <div class="modal-head">
+        <h2 id="quest-modal-title"></h2>
+        <button class="modal-close" onclick="document.getElementById('quest-modal').classList.remove('open')">&times;</button>
+      </div>
+      <pre id="quest-modal-body" style="font-size:11px;color:var(--text);overflow:auto;max-height:70vh;margin:0;padding:10px;background:var(--card);border-radius:6px;white-space:pre-wrap;word-break:break-word"></pre>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="deploy-modal" onclick="if(event.target===this)this.classList.remove('open')">
     <div class="modal">
       <div class="modal-head">
@@ -284,6 +311,12 @@
       if (s < 3600) return `${Math.floor(s / 60)}m ago`;
       if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
       return `${Math.floor(s / 86400)}d ago`;
+    }
+
+    function showQuestJson(raw) {
+      document.getElementById('quest-modal-title').textContent = raw.id ?? 'Quest';
+      document.getElementById('quest-modal-body').textContent = JSON.stringify(raw, null, 2);
+      document.getElementById('quest-modal').classList.add('open');
     }
 
     function showDeployModal(idx) {
@@ -369,78 +402,31 @@
         </div>
       `).join('');
 
-      // Active workers
-      const workerRows = d.activeWorkers.length
-        ? d.activeWorkers.map(w => `
-          <div class="row">
-            <span style="color:var(--orange)">${esc(w.type)}</span>
-            <span style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
-              <span style="color:var(--muted);font-size:11px">${esc(w.task_id)}</span>
-              <span style="color:var(--muted);font-size:11px">${esc(w.startedAgo)}</span>
-            </span>
-          </div>
-        `).join('')
-        : `<div class="empty">idle</div>`;
+      // Scheduled tasks — preserve expanded state across refreshes
+      const expandedTasks = new Set(
+        document.querySelectorAll('.sched-detail:not(.hidden)')
+      );
+      const expandedIds = new Set();
+      expandedTasks.forEach(el => {
+        const row = el.closest('.side-row');
+        if (row) expandedIds.add(row.dataset.taskId);
+      });
 
-      // Open PRs (compact for sidebar)
-      const PR_STATUS = {
-        ok:                 { icon: '✅', cls: 'tag-green' },
-        ci_failing:         { icon: '🔴', cls: 'tag-red' },
-        conflict:           { icon: '💥', cls: 'tag-red' },
-        behind:             { icon: '⏳', cls: 'tag-yellow' },
-        changes_requested:  { icon: '🔄', cls: 'tag-orange' },
-        ready:              { icon: '🚀', cls: 'tag-green' },
-        'awaiting review':  { icon: '👀', cls: 'tag-purple' },
-      };
-      const inflightSet = new Set(d.inflightPrs ?? []);
-      const prRows = (d.openPrs ?? []).map(pr => {
-        const s = PR_STATUS[pr.status] ?? { icon: '❓', cls: 'tag-blue' };
-        const signalId = `github:pr:crcl-main/${pr.repo}/${pr.number}`;
-        const working = inflightSet.has(signalId) ? ' 🦝' : '';
-        const approved = pr.approved ? ' ✓' : '';
+      const scheduledRows = (d.scheduledTasks ?? []).map(t => {
+        const kindTag = t.kind === 'script'
+          ? '<span title="script">⚡</span>'
+          : '<span title="worker">🧠</span>';
+        const detailClass = expandedIds.has(t.id) ? 'sched-detail' : 'sched-detail hidden';
         return `
-          <div class="side-row" style="font-size:11px">
+          <div class="side-row" data-task-id="${esc(t.id)}" style="cursor:pointer" onclick="this.querySelector('.sched-detail').classList.toggle('hidden')">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <span><span title="${esc(pr.status)}">${s.icon}</span> <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue)">${esc(pr.repo)}#${pr.number}</a></span>
-              <span style="color:var(--muted)">${approved}${working}</span>
+              <span style="color:var(--cyan);font-weight:600">${esc(t.id)}</span>
+              <span style="display:flex;gap:4px">${kindTag}<span class="tag tag-purple">${esc(t.every)}</span></span>
             </div>
-          </div>
-        `;
-      }).join('');
-
-      // Deploys
-      const DEPLOY_STATUS = {
-        pending:  { icon: '🔶', cls: 'tag-yellow' },
-        approved: { icon: '✅', cls: 'tag-green' },
-      };
-      // Store deploy data for modal access
-      window.__deploys = d.deploys ?? [];
-      const deployRows = (d.deploys ?? []).map((dep, i) => {
-        const s = DEPLOY_STATUS[dep.status] ?? DEPLOY_STATUS.pending;
-        const hasDetail = dep.evidence || dep.description;
-        return `
-          <div class="side-row" style="font-size:11px${hasDetail ? ';cursor:pointer' : ''}" ${hasDetail ? `onclick="showDeployModal(${i})"` : ''}>
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span>${s.icon} ${esc(dep.service)}</span>
-              <span class="tag ${s.cls}">${esc(dep.status ?? 'pending')}</span>
+            <div class="${detailClass}">
+              <div class="side-muted">${esc(t.description)}</div>
+              <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
             </div>
-            <div class="side-muted">${esc(dep.requester ?? '')} &middot; ${esc(dep.createdAgo)}</div>
-          </div>
-        `;
-      }).join('');
-
-      // Review requests
-      const reviewRows = (d.reviewRequests ?? []).map(rr => {
-        const statusTag = rr.reviewedByMe
-          ? '<span class="tag tag-green">reviewed</span>'
-          : '<span class="tag tag-yellow">pending</span>';
-        return `
-          <div class="side-row" style="font-size:11px">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span><a href="${esc(rr.url)}" target="_blank" style="color:var(--blue)">${esc(rr.repo)}#${rr.number}</a></span>
-              ${statusTag}
-            </div>
-            <div class="side-muted">${esc(rr.author)} &middot; ${esc(rr.updatedAgo)}</div>
           </div>
         `;
       }).join('');
@@ -463,27 +449,17 @@
           ${scouts}
         </div>
         <div class="section">
-          <div class="section-title">Workers${d.activeWorkers.length ? ` <span class="tag tag-green">${d.activeWorkers.length} active</span>` : ''}</div>
-          ${workerRows}
-        </div>
-        <div class="section">
-          <div class="section-title">Open PRs${d.openPrs?.length ? ` <span class="tag tag-blue">${d.openPrs.length}</span>` : ''}</div>
-          ${prRows || '<div class="empty">No open PRs</div>'}
-        </div>
-        <div class="section">
-          <div class="section-title">Reviews${d.reviewRequests?.length ? ` <span class="tag tag-blue">${d.reviewRequests.length}</span>` : ''}</div>
-          ${reviewRows || '<div class="empty">None pending</div>'}
-        </div>
-        <div class="section">
-          <div class="section-title">Deploys${d.deploys?.length ? ` <span class="tag tag-blue">${d.deploys.length}</span>` : ''}</div>
-          ${deployRows || '<div class="empty">None recent</div>'}
+          <div class="section-title">Scheduled Tasks</div>
+          ${scheduledRows || '<div class="empty">None configured</div>'}
         </div>
       `;
     }
 
     function renderMain(d) {
       // Active quests
-      const questCards = d.activeQuests.map(q => {
+      window.__questRaw = [];
+      const questCards = d.activeQuests.map((q, i) => {
+        window.__questRaw.push(q.raw);
         const tags = [
           q.agentStatus === 'running' ? `<span class="tag tag-green">running</span>` : '',
           `<span class="tag tag-purple">${esc(q.status)}</span>`,
@@ -498,14 +474,35 @@
           </div>
         `).join('');
 
+        const jsonIdx = window.__questRaw.length - 1;
         return `
           <div class="quest-card">
             <div class="quest-head">
               <span><span class="quest-id">${esc(q.id)}</span> <span class="quest-age">${q.createdAgo}</span></span>
-              <span>${tags}</span>
+              <span><span class="tag" style="cursor:pointer;font-size:11px" onclick="showQuestJson(window.__questRaw[${jsonIdx}])" title="View JSON">{ }</span> ${tags}</span>
             </div>
             <div class="quest-obj">${esc(q.objective)}</div>
             ${logs ? `<div class="quest-logs">${logs}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      // Completed quests (collapsible)
+      const completedCards = (d.completedQuests ?? []).map(q => {
+        const jsonIdx = window.__questRaw.length;
+        window.__questRaw.push(q.raw);
+        const statusTag = q.status === 'completed'
+          ? '<span class="tag tag-green">completed</span>'
+          : `<span class="tag tag-red">${esc(q.status)}</span>`;
+        const prTag = q.prUrl ? ` <a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '';
+        return `
+          <div class="quest-card-completed" style="cursor:pointer" onclick="this.querySelectorAll('.quest-detail').forEach(el=>el.classList.toggle('expanded'))">
+            <div class="quest-head">
+              <span><span class="quest-id">${esc(q.id)}</span> <span class="quest-age">${q.updatedAgo}</span></span>
+              <span><span class="tag" style="cursor:pointer;font-size:11px" onclick="event.stopPropagation();showQuestJson(window.__questRaw[${jsonIdx}])" title="View JSON">{ }</span> ${statusTag}${prTag}</span>
+            </div>
+            <div class="quest-detail"><span class="quest-detail-label">objective</span> ${esc(q.objective)}</div>
+            ${q.outcome ? `<div class="quest-detail"><span class="quest-detail-label">outcome</span> ${esc(q.outcome)}</div>` : ''}
           </div>
         `;
       }).join('');
@@ -530,14 +527,25 @@
         `;
       }).join('');
 
+      // Preserve completed-quests collapse state across refreshes
+      const completedWasHidden = document.getElementById('completed-quests-list')?.classList.contains('hidden') ?? false;
+
       document.getElementById('col-main').innerHTML = `
-        <div class="section">
-          <div class="section-title">Active Quests</div>
-          ${questCards || '<div class="empty">No active quests</div>'}
-        </div>
         <div class="section">
           <div class="section-title">Jira Tickets${d.jiraTickets?.length ? ` <span class="tag tag-blue">${d.jiraTickets.length}</span>` : ''}</div>
           ${renderJiraTickets(d)}
+        </div>
+        <div class="section">
+          <div class="section-title">Quests${d.activeQuests.length ? ` <span class="tag tag-green">${d.activeQuests.length} active</span>` : ''}</div>
+          ${questCards || '<div class="empty">No active quests</div>'}
+          ${completedCards ? `
+            <div class="quest-completed-section">
+              <div class="section-title quest-completed-toggle" onclick="document.getElementById('completed-quests-list').classList.toggle('hidden')">
+                <span style="font-size:11px">&#9660;</span> Recently Completed <span class="tag tag-purple">${d.completedQuests.length}</span>
+              </div>
+              <div id="completed-quests-list"${completedWasHidden ? ' class="hidden"' : ''}>${completedCards}</div>
+            </div>
+          ` : ''}
         </div>
         <div class="section">
           <div class="section-title">Recent Dispatches</div>
@@ -548,10 +556,10 @@
 
     function renderJiraTickets(d) {
       const COLS = [
+        { status: 'Backlog',     icon: '📋', cls: 'kanban-col--yellow', tagCls: 'tag-yellow' },
         { status: 'In Progress', icon: '🔨', cls: 'kanban-col--blue', tagCls: 'tag-blue' },
         { status: 'In Review',   icon: '👀', cls: 'kanban-col--purple', tagCls: 'tag-purple' },
         { status: 'IN TESTING',  icon: '🧪', cls: 'kanban-col--cyan', tagCls: 'tag-cyan' },
-        { status: 'Backlog',     icon: '📋', cls: 'kanban-col--yellow', tagCls: 'tag-yellow' },
       ];
       const tickets = d.jiraTickets ?? [];
       if (!tickets.length) return '<div class="empty">No active tickets</div>';
@@ -605,43 +613,66 @@
         `;
       }).join('');
 
-      // Scheduled tasks — preserve expanded state across refreshes
-      const expandedTasks = new Set(
-        document.querySelectorAll('.sched-detail:not(.hidden)')
-      );
-      const expandedIds = new Set();
-      expandedTasks.forEach(el => {
-        const row = el.closest('.side-row');
-        if (row) expandedIds.add(row.dataset.taskId);
-      });
-
-      const scheduledRows = (d.scheduledTasks ?? []).map(t => {
-        const kindTag = t.kind === 'script'
-          ? '<span title="script">⚡</span>'
-          : '<span title="worker">🧠</span>';
-        const detailClass = expandedIds.has(t.id) ? 'sched-detail' : 'sched-detail hidden';
+      // Open PRs
+      const PR_STATUS = {
+        ok:                 { icon: '✅', cls: 'tag-green' },
+        ci_failing:         { icon: '🔴', cls: 'tag-red' },
+        conflict:           { icon: '💥', cls: 'tag-red' },
+        behind:             { icon: '⏳', cls: 'tag-yellow' },
+        changes_requested:  { icon: '🔄', cls: 'tag-orange' },
+        ready:              { icon: '🚀', cls: 'tag-green' },
+        'awaiting review':  { icon: '👀', cls: 'tag-purple' },
+      };
+      const inflightSet = new Set(d.inflightPrs ?? []);
+      const prRows = (d.openPrs ?? []).map(pr => {
+        const s = PR_STATUS[pr.status] ?? { icon: '❓', cls: 'tag-blue' };
+        const signalId = `github:pr:crcl-main/${pr.repo}/${pr.number}`;
+        const working = inflightSet.has(signalId) ? ' 🦝' : '';
+        const approved = pr.approved ? ' ✓' : '';
         return `
-          <div class="side-row" data-task-id="${esc(t.id)}" style="cursor:pointer" onclick="this.querySelector('.sched-detail').classList.toggle('hidden')">
+          <div class="side-row" style="font-size:11px">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="color:var(--cyan);font-weight:600">${esc(t.id)}</span>
-              <span style="display:flex;gap:4px">${kindTag}<span class="tag tag-purple">${esc(t.every)}</span></span>
-            </div>
-            <div class="${detailClass}">
-              <div class="side-muted">${esc(t.description)}</div>
-              <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
+              <span><span title="${esc(pr.status)}">${s.icon}</span> <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue)">${esc(pr.repo)}#${pr.number}</a></span>
+              <span style="color:var(--muted)">${approved}${working}</span>
             </div>
           </div>
         `;
       }).join('');
 
-      // Completed quests
-      const completed = d.completedQuests.map(q => `
-        <div class="side-row">
-          <span style="color:var(--purple)">${esc(q.id)}</span>
-          <span style="color:var(--muted);font-size:11px"> ${q.updatedAgo}</span>
-          <div class="side-muted">${esc(q.objective)}</div>
-        </div>
-      `).join('');
+      // Review requests
+      const reviewRows = (d.reviewRequests ?? []).map(rr => {
+        const statusTag = rr.reviewedByMe
+          ? '<span class="tag tag-green">reviewed</span>'
+          : '<span class="tag tag-yellow">pending</span>';
+        return `
+          <div class="side-row" style="font-size:11px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span><a href="${esc(rr.url)}" target="_blank" style="color:var(--blue)">${esc(rr.repo)}#${rr.number}</a></span>
+              ${statusTag}
+            </div>
+            <div class="side-muted">${esc(rr.author)} &middot; ${esc(rr.updatedAgo)}</div>
+          </div>
+        `;
+      }).join('');
+
+      // Deploys
+      const DEPLOY_STATUS = {
+        pending:  { icon: '🔶', cls: 'tag-yellow' },
+        approved: { icon: '✅', cls: 'tag-green' },
+      };
+      window.__deploys = d.deploys ?? [];
+      const deployRows = (d.deploys ?? []).map((dep, i) => {
+        const s = DEPLOY_STATUS[dep.status] ?? DEPLOY_STATUS.pending;
+        return `
+          <div class="side-row" style="font-size:11px;cursor:pointer" onclick="showDeployModal(${i})">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>${s.icon} ${esc(dep.service)}</span>
+              <span class="tag ${s.cls}">${esc(dep.status ?? 'pending')}</span>
+            </div>
+            <div class="side-muted">${esc(dep.requester ?? '')} &middot; ${esc(dep.createdAgo)}</div>
+          </div>
+        `;
+      }).join('');
 
       document.getElementById('col-right').innerHTML = `
         <div class="section">
@@ -649,12 +680,16 @@
           ${meetings || '<div class="empty">None upcoming</div>'}
         </div>
         <div class="section">
-          <div class="section-title">Scheduled Tasks</div>
-          ${scheduledRows || '<div class="empty">None configured</div>'}
+          <div class="section-title">Open PRs${d.openPrs?.length ? ` <span class="tag tag-blue">${d.openPrs.length}</span>` : ''}</div>
+          ${prRows || '<div class="empty">No open PRs</div>'}
         </div>
         <div class="section">
-          <div class="section-title">Recently Completed</div>
-          ${completed || '<div class="empty">None</div>'}
+          <div class="section-title">Reviews${d.reviewRequests?.length ? ` <span class="tag tag-blue">${d.reviewRequests.length}</span>` : ''}</div>
+          ${reviewRows || '<div class="empty">None pending</div>'}
+        </div>
+        <div class="section">
+          <div class="section-title">Deploys${d.deploys?.length ? ` <span class="tag tag-blue">${d.deploys.length}</span>` : ''}</div>
+          ${deployRows || '<div class="empty">None recent</div>'}
         </div>
       `;
     }
@@ -675,7 +710,10 @@
     }
 
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') document.getElementById('deploy-modal').classList.remove('open');
+      if (e.key === 'Escape') {
+        document.getElementById('deploy-modal').classList.remove('open');
+        document.getElementById('quest-modal').classList.remove('open');
+      }
     });
 
     // ── Metrics widget ──────────────────────────────────────────────────────
