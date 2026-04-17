@@ -12,16 +12,16 @@
  */
 
 import { spawn, spawnSync, execSync } from "child_process";
-import { existsSync, mkdirSync, unlinkSync, createWriteStream } from "fs";
+import { existsSync, mkdirSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { openDb } from "./scripts/db.js";
+import { openDb } from "./src/db.js";
 import { z } from "zod";
-import { SCOUT_INTERVALS_MS, readJson, readJsonWithSchema, writeJson } from "./scripts/config.js";
-import { SettingsSchema, ScheduledTaskSchema, WorkerResultSchema, DelegationSchema } from "./scripts/config.js";
-import type { DelegationTask, WorkerResult, DispatchLogEntry, Settings, ScheduledTask, Delegation } from "./scripts/config.js";
-import { initQuestManager, spawnQuestAgent, writeInflightPrs, reapQuests } from "./scripts/quest-manager.js";
-import log from "./scripts/logger.js";
+import { SCOUT_INTERVALS_MS, readJson, readJsonWithSchema, writeJson } from "./src/config.js";
+import { SettingsSchema, ScheduledTaskSchema, DelegationSchema } from "./src/config.js";
+import type { DelegationTask, WorkerResult, DispatchLogEntry, Delegation } from "./src/config.js";
+import { initTaskManager, spawnBackgroundTask, reapTasks, writeInflightSignals } from "./src/task-manager.js";
+import log from "./src/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -33,9 +33,7 @@ const WORKER_LOGS_DIR = join(ROOT, "state", "logs", "workers");
 
 const CYCLE_INTERVAL_MS = 30 * 1000;
 const LOCK_STALE_MS = 3 * 60 * 1000;
-const WORKER_TIMEOUT_MS = 10 * 60_000;
 const SCRIPT_TIMEOUT_MS = 60_000; // default for kind: "script" tasks
-const ACTIVE_WORKERS_FILE = join(ROOT, "state", "active_workers.json");
 
 const SETTINGS_FILE = join(ROOT, "state", "settings.json");
 const SCHEDULED_TASKS_FILE = join(ROOT, "state", "scheduled_tasks.json");
@@ -160,7 +158,7 @@ function runStartupChecks(enabledScouts: string[]): void {
 function runScout(name: string): void {
   log.info(` Running ${name} scout...`);
   try {
-    execSync(`npx tsx scripts/scouts/${name}.ts`, {
+    execSync(`npx tsx src/scouts/${name}.ts`, {
       cwd: ROOT,
       stdio: "inherit",
       timeout: 120_000,
@@ -173,7 +171,7 @@ function runScout(name: string): void {
 function runFilterSignals(): void {
   log.info("Running filter-signals...");
   try {
-    execSync("npx tsx scripts/filter-signals.ts", {
+    execSync("npx tsx src/filter-signals.ts", {
       cwd: ROOT,
       stdio: "inherit",
       timeout: 30_000,
@@ -205,7 +203,7 @@ interface SlackInboxEvent {
 function fetchThreadContext(channel: string, threadTs: string): string | null {
   try {
     const raw = execSync(
-      `npx tsx scripts/slack_conversations.ts thread ${channel} ${threadTs} --json`,
+      `npx tsx src/slack_conversations.ts thread ${channel} ${threadTs} --json`,
       { cwd: ROOT, timeout: 15_000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
     ).trim();
     const messages = JSON.parse(raw) as Array<{ user?: string; text?: string; ts?: string }>;
@@ -285,11 +283,20 @@ function generateDmTasks(): DelegationTask[] {
     });
   }
 
-  // Annotate brain_input with max_task_type so the brain knows which events can spawn quests
+  // Annotate brain_input with max_task_type so the brain knows which events can spawn quests.
+  // Events that fail trigger-mode filtering get null — the brain must not act on them.
   const annotatedInbox = inbox.map((event) => {
     if (!event.user_id) return { ...event, max_task_type: null };
     const r = authDb.isAllowed(event.channel, event.channel_type, event.user_id, ownerId, authorizedIds);
-    return { ...event, max_task_type: r.allowed ? r.maxTaskType : null };
+    if (!r.allowed) return { ...event, max_task_type: null };
+
+    // Apply the same trigger-mode filter used for dm_reply generation
+    const isMention = event.type === "app_mention" || (event.text ?? "").includes(`<@${FRANKLIN_BOT_USER_ID}>`);
+    const isWhiskey = event.type === "reaction_added" && event.reaction === "whiskey";
+    if (r.triggerMode === "none") return { ...event, max_task_type: null };
+    if (r.triggerMode === "mention" && !isMention && !isWhiskey && event.channel_type !== "im") return { ...event, max_task_type: null };
+
+    return { ...event, max_task_type: r.maxTaskType };
   });
   writeJson(inboxFile, annotatedInbox);
 
@@ -309,15 +316,20 @@ const INTERVAL_UNITS: Record<string, number> = {
   d: 24 * 60 * 60_000,
 };
 
-function parseInterval(every: string): { intervalMs: number; weekdaysOnly: boolean; dailyOnce: boolean } | null {
-  if (every === "weekdays") return { intervalMs: 24 * 60 * 60_000, weekdaysOnly: true, dailyOnce: true };
-  if (every === "daily") return { intervalMs: 24 * 60 * 60_000, weekdaysOnly: false, dailyOnce: true };
-  if (every === "weekly") return { intervalMs: 7 * 24 * 60 * 60_000, weekdaysOnly: false, dailyOnce: false };
+function parseInterval(every: string): { intervalMs: number; weekdaysOnly: boolean; dailyOnce: boolean; afterTime?: { hour: number; minute: number } } | null {
+  // Strip optional @HH:MM suffix (e.g. "weekdays@08:00", "daily@09:30")
+  const timeMatch = every.match(/@(\d{1,2}):(\d{2})$/);
+  const afterTime = timeMatch ? { hour: parseInt(timeMatch[1], 10), minute: parseInt(timeMatch[2], 10) } : undefined;
+  const base = timeMatch ? every.slice(0, timeMatch.index) : every;
 
-  const match = every.match(/^(\d+)\s*(m|h|d|w)$/);
+  if (base === "weekdays") return { intervalMs: 24 * 60 * 60_000, weekdaysOnly: true, dailyOnce: true, afterTime };
+  if (base === "daily") return { intervalMs: 24 * 60 * 60_000, weekdaysOnly: false, dailyOnce: true, afterTime };
+  if (base === "weekly") return { intervalMs: 7 * 24 * 60 * 60_000, weekdaysOnly: false, dailyOnce: false, afterTime };
+
+  const match = base.match(/^(\d+)\s*(m|h|d|w)$/);
   if (!match) return null;
   const units: Record<string, number> = { ...INTERVAL_UNITS, w: 7 * 24 * 60 * 60_000 };
-  return { intervalMs: parseInt(match[1], 10) * units[match[2]], weekdaysOnly: false, dailyOnce: false };
+  return { intervalMs: parseInt(match[1], 10) * units[match[2]], weekdaysOnly: false, dailyOnce: false, afterTime };
 }
 
 function generateScheduledTasks(): DelegationTask[] {
@@ -332,11 +344,32 @@ function generateScheduledTasks(): DelegationTask[] {
   const tasks: DelegationTask[] = [];
   let changed = false;
 
+  // Open DB once to check for in-flight scheduled tasks
+  const schedDb = openDb();
+
   for (const job of scheduled) {
+    // Skip if this scheduled task is already running (background task not yet reaped)
+    if (schedDb.hasRunningTaskWithScheduledId(job.id)) continue;
     const parsed = parseInterval(job.every);
     if (!parsed) {
       log.error(` Bad interval "${job.every}" on scheduled task ${job.id} — skipping`);
       continue;
+    }
+
+    // Skip tasks that have failed 3+ consecutive times — wait for manual reset
+    if ((job.fail_count ?? 0) >= 3) {
+      log.warn(` Scheduled task ${job.id} has failed ${job.fail_count} consecutive times — skipping until manual reset`);
+      continue;
+    }
+
+    // Exponential backoff with jitter for failed tasks: 5m, 10m, 20m...
+    const failCount = job.fail_count ?? 0;
+    if (failCount > 0 && job.last_fail) {
+      const backoffBase = 5 * 60_000; // 5 minutes
+      const backoffMs = backoffBase * Math.pow(2, failCount - 1);
+      const jitter = Math.random() * backoffMs * 0.3; // up to 30% jitter
+      const elapsed = now.getTime() - new Date(job.last_fail).getTime();
+      if (elapsed < backoffMs + jitter) continue;
     }
 
     if (parsed.weekdaysOnly) {
@@ -350,6 +383,12 @@ function generateScheduledTasks(): DelegationTask[] {
       const lastRunInTz = job.last_run ? new Date(new Date(job.last_run).toLocaleString("en-US", { timeZone: ownerTz })) : null;
       const lastRunDay = lastRunInTz ? `${lastRunInTz.getFullYear()}-${String(lastRunInTz.getMonth() + 1).padStart(2, "0")}-${String(lastRunInTz.getDate()).padStart(2, "0")}` : null;
       if (lastRunDay === today) continue;
+      // If an @HH:MM time is specified, don't fire until that local time
+      if (parsed.afterTime) {
+        const localHour = nowLocal.getHours();
+        const localMinute = nowLocal.getMinutes();
+        if (localHour < parsed.afterTime.hour || (localHour === parsed.afterTime.hour && localMinute < parsed.afterTime.minute)) continue;
+      }
     } else {
       // Interval-based — due if never run, or interval has elapsed
       if (job.last_run) {
@@ -368,14 +407,9 @@ function generateScheduledTasks(): DelegationTask[] {
       context: { ...job.context, scheduled_task_id: job.id },
       mark_surfaced: null,
     });
-
-    job.last_run = now.toISOString();
-    changed = true;
   }
 
-  if (changed) {
-    writeJson(SCHEDULED_TASKS_FILE, scheduled);
-  }
+  schedDb.close();
 
   if (tasks.length) {
     log.info(` Generated ${tasks.length} scheduled task(s)`);
@@ -413,40 +447,7 @@ function appendDispatchLog(entry: DispatchLogEntry): void {
   logDb.close();
 }
 
-// ── Async worker spawn ────────────────────────────────────────────────────────
-
-function spawnWithTimeout(
-  args: string[],
-  timeoutMs: number,
-  logFile?: string,
-): Promise<{ exitCode: number | null; timedOut: boolean }> {
-  return new Promise((resolve) => {
-    const child = spawn("claude", args, { cwd: ROOT, stdio: logFile ? ["ignore", "pipe", "pipe"] : "inherit" });
-    let timedOut = false;
-
-    // Tee stdout/stderr to a log file while keeping console output
-    if (logFile && child.stdout && child.stderr) {
-      mkdirSync(dirname(logFile), { recursive: true });
-      const stream = createWriteStream(logFile, { flags: "w" });
-      child.stdout.on("data", (chunk: Buffer) => { process.stdout.write(chunk); stream.write(chunk); });
-      child.stderr.on("data", (chunk: Buffer) => { process.stderr.write(chunk); stream.write(chunk); });
-      child.on("close", () => stream.end());
-    }
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch { /* already dead */ }
-      }, 5_000);
-    }, timeoutMs);
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ exitCode: code, timedOut });
-    });
-  });
-}
+// ── Script task runner (synchronous, no LLM) ────────────────────────────────
 
 function runScriptTask(task: DelegationTask): WorkerResult {
   const dispatchedAt = new Date().toISOString();
@@ -488,92 +489,52 @@ function runScriptTask(task: DelegationTask): WorkerResult {
   return result;
 }
 
-async function runWorker(task: DelegationTask): Promise<WorkerResult | null> {
-  const dispatchedAt = new Date().toISOString();
+// ── Dispatch — fire-and-forget for LLM tasks, sync for scripts ──────────────
 
-  // Script tasks run shell commands directly — no LLM
-  if (task.kind === "script") return runScriptTask(task);
-
-  // Quest tasks spawn a background agent — don't block the cycle
-  if (task.type === "quest") return spawnQuestAgent(task);
-
-  log.info(` Spawning ${task.type} worker for ${task.id}...`);
-  mkdirSync(WORKER_RESULTS_DIR, { recursive: true });
-
-  const workerLogFile = join(WORKER_LOGS_DIR, `${task.id}.log`);
-  const { exitCode, timedOut } = await spawnWithTimeout(
-    ["--dangerously-skip-permissions", "--print", "-p",
-      `Read modes/worker_wrapper.md and execute. The task ID is ${task.id}.`],
-    WORKER_TIMEOUT_MS,
-    workerLogFile,
-  );
-
-  const completedAt = new Date().toISOString();
-
-  if (timedOut) {
-    log.error(` ${task.type}/${task.id} timed out after ${WORKER_TIMEOUT_MS / 60_000}m — killed`);
-    appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
-      dispatched_at: dispatchedAt, completed_at: completedAt, status: "timeout", summary: "worker timed out" });
-    return null;
-  }
-
-  if (exitCode !== 0) {
-    log.error(` ${task.type}/${task.id} exited with code ${exitCode}`);
-  }
-
-  const workerResult = readJsonWithSchema(join(WORKER_RESULTS_DIR, `${task.id}.json`), WorkerResultSchema);
-  appendDispatchLog({ task_id: task.id, type: task.type, priority: task.priority,
-    dispatched_at: dispatchedAt, completed_at: completedAt,
-    status: workerResult?.status ?? "error", summary: workerResult?.summary ?? null });
-  return workerResult;
-}
-
-async function dispatchWorkers(delegation: Delegation): Promise<void> {
-  // Publish in-flight worker list before spawning so the dashboard can see them
-  writeJson(ACTIVE_WORKERS_FILE, {
-    updated_at: new Date().toISOString(),
-    workers: delegation.tasks.map((t) => ({ task_id: t.id, type: t.type, priority: t.priority, started_at: new Date().toISOString() })),
-  });
-
-  // Register pr_monitor tasks as inflight before spawning
-  const inflightDb = openDb();
+function dispatchTasks(delegation: Delegation): void {
   for (const task of delegation.tasks) {
-    if (task.type === "pr_monitor") {
-      const signalId = (task.context.signal_id as string) ?? null;
-      if (signalId) inflightDb.addInflightPr(signalId, task.id, process.pid);
-    }
-  }
-  inflightDb.close();
-
-  // Run all workers concurrently — allSettled so one failure doesn't kill the rest
-  const settled = await Promise.allSettled(delegation.tasks.map((task) => runWorker(task)));
-
-  writeJson(ACTIVE_WORKERS_FILE, { updated_at: new Date().toISOString(), workers: [] });
-
-  const db = openDb();
-  for (let i = 0; i < delegation.tasks.length; i++) {
-    const task = delegation.tasks[i];
-    const outcome = settled[i];
-    if (outcome.status === "rejected") {
-      log.error(` Worker ${task.id} crashed:`, outcome.reason);
-      // Remove from inflight on crash
-      if (task.type === "pr_monitor" && task.context.signal_id) {
-        db.removeInflightPr(task.context.signal_id as string);
+    if (task.kind === "script") {
+      // Script tasks run synchronously — no LLM involved
+      const result = runScriptTask(task);
+      // Apply mark_surfaced inline for scripts (they complete immediately)
+      if (result.status === "ok" && task.mark_surfaced) {
+        const sdb = openDb();
+        log.info(` markSurfaced: ${task.mark_surfaced.id}`);
+        sdb.markSurfaced(task.mark_surfaced.id, task.mark_surfaced.state);
+        sdb.close();
+      }
+      // Update scheduled task bookkeeping inline for scripts
+      const schedId = task.context.scheduled_task_id as string | undefined;
+      if (schedId) {
+        updateScheduledTaskResult(schedId, result.status === "ok" ? "ok" : "error");
       }
       continue;
     }
-    const result = outcome.value;
-    if (result?.status === "ok" && task.mark_surfaced) {
-      const { id, state } = task.mark_surfaced;
-      log.info(` markSurfaced: ${id}`);
-      db.markSurfaced(id, state);
-    }
-    // Remove from inflight when worker completes (success or failure)
-    if (task.type === "pr_monitor" && task.context.signal_id) {
-      db.removeInflightPr(task.context.signal_id as string);
-    }
+
+    // Everything else is fire-and-forget — reaper collects results next cycle
+    spawnBackgroundTask(task);
   }
-  db.close();
+}
+
+// ── Scheduled task result bookkeeping ───────────────────────────────────────
+
+function updateScheduledTaskResult(schedId: string, status: "ok" | "error"): void {
+  const scheduled = readJsonWithSchema(SCHEDULED_TASKS_FILE, z.array(ScheduledTaskSchema)) ?? [];
+  for (const job of scheduled) {
+    if (job.id !== schedId) continue;
+    if (status === "ok") {
+      job.last_run = new Date().toISOString();
+      job.fail_count = 0;
+      job.last_fail = null;
+      log.info(` Scheduled task ${job.id} succeeded — updated last_run`);
+    } else {
+      job.fail_count = (job.fail_count ?? 0) + 1;
+      job.last_fail = new Date().toISOString();
+      log.warn(` Scheduled task ${job.id} failed (fail_count: ${job.fail_count}, next retry in ~${5 * Math.pow(2, job.fail_count - 1)}m)`);
+    }
+    writeJson(SCHEDULED_TASKS_FILE, scheduled);
+    return;
+  }
 }
 
 // ── Server child process ──────────────────────────────────────────────────────
@@ -604,12 +565,16 @@ function startServer(): void {
 
 // ── Cycle ──────────────────────────────────────────────────────────────────────
 
-async function runCycle(startedAt: string): Promise<void> {
+function runCycle(startedAt: string): void {
   const cycleStart = new Date().toISOString();
   log.info(`── Cycle at ${cycleStart} ──`);
 
-  // Update heartbeat
+  // Keep heartbeat fresh throughout the cycle — scouts, brain, and workers
+  // can block for many minutes; a single write at cycle-start goes stale.
   writeLock(startedAt);
+  const heartbeat = setInterval(() => writeLock(startedAt), 30_000);
+  const stopHeartbeat = () => clearInterval(heartbeat);
+  try {
 
   const lastRun = readLastRun();
 
@@ -635,15 +600,28 @@ async function runCycle(startedAt: string): Promise<void> {
   // filter-signals always runs (drains slack inbox each cycle)
   runFilterSignals();
 
-  // Check in on quests — finalize completed ones, enforce timeouts
-  reapQuests();
+  // Reap completed/failed/timed-out background tasks from previous cycles
+  const reaped = reapTasks();
+
+  // Update scheduled task bookkeeping for reaped background tasks
+  for (const r of reaped.completed) {
+    if (r.scheduledTaskId) {
+      updateScheduledTaskResult(r.scheduledTaskId, r.status);
+    }
+  }
 
   // Generate deterministic tasks
   const dmTasks = generateDmTasks();
   const scheduledTasks = generateScheduledTasks();
 
-  // Write inflight PRs snapshot — prunes stale entries, informs brain of in-progress work
-  writeInflightPrs();
+  // Write inflight signals snapshot — informs brain of in-progress work
+  writeInflightSignals();
+
+  // Write pending deploys needing review to brain input
+  const deployDb = openDb();
+  const pendingDeploys = deployDb.getPendingDeploysNeedingReview();
+  deployDb.close();
+  writeJson(join(ROOT, "state", "brain_input", "pending_deploys.json"), pendingDeploys);
 
   // Brain tick — handles GitHub/Jira/Gmail signals
   runBrain();
@@ -653,18 +631,19 @@ async function runCycle(startedAt: string): Promise<void> {
   const brainTasks = brainDelegation?.tasks ?? [];
   const allTasks = [...dmTasks, ...scheduledTasks, ...brainTasks];
 
-  // Assign globally unique task IDs from DB
-  const idDb = openDb();
-  const lastTaskId = idDb.lastTaskId();
-  idDb.close();
-  const lastNum = lastTaskId?.match(/(\d+)/)?.[1] ? parseInt(lastTaskId.match(/(\d+)/)![1], 10) : 0;
-  allTasks.forEach((t, i) => { t.id = `task-${String(lastNum + i + 1).padStart(8, "0")}`; });
+  // Assign globally unique task IDs from DB counter (atomic across processes)
+  if (allTasks.length) {
+    const idDb = openDb();
+    const ids = idDb.nextTaskIds(allTasks.length);
+    idDb.close();
+    allTasks.forEach((t, i) => { t.id = ids[i]; });
+  }
 
   if (allTasks.length) {
     const merged: Delegation = { generated_at: new Date().toISOString(), tasks: allTasks };
     writeJson(DELEGATION_FILE, merged);
     log.info(` Dispatching ${allTasks.length} task(s) (${dmTasks.length} dm, ${scheduledTasks.length} sched, ${brainTasks.length} brain)...`);
-    await dispatchWorkers(merged);
+    dispatchTasks(merged);
   } else {
     log.debug("No tasks this cycle");
   }
@@ -688,6 +667,9 @@ async function runCycle(startedAt: string): Promise<void> {
 
   const elapsedSec = ((Date.now() - new Date(cycleStart).getTime()) / 1000).toFixed(1);
   log.info(` Cycle complete in ${elapsedSec}s`);
+  } finally {
+    stopHeartbeat();
+  }
 }
 
 // ── Status command ─────────────────────────────────────────────────────────────
@@ -762,8 +744,8 @@ const enabledScouts = Object.keys(SCOUT_INTERVALS_MS).filter((s) => {
 });
 runStartupChecks(enabledScouts);
 
-// Initialize quest manager with root path and dispatch logger
-initQuestManager(ROOT, appendDispatchLog);
+// Initialize task manager with root path and dispatch logger
+initTaskManager(ROOT, appendDispatchLog);
 
 const startedAt = new Date().toISOString();
 writeLock(startedAt);
@@ -794,9 +776,9 @@ process.on("unhandledRejection", (reason) => {
 // Run cycles sequentially with a fixed gap between completions.
 // Using setTimeout chains (not setInterval) prevents overlapping cycles if a
 // cycle takes longer than CYCLE_INTERVAL_MS.
-async function loop(): Promise<void> {
+function loop(): void {
   startServer(); // no-op if already running; restarts if it crashed
-  await runCycle(startedAt);
+  runCycle(startedAt);
   const timer = setTimeout(() => loop(), CYCLE_INTERVAL_MS);
   timer.ref();
 }

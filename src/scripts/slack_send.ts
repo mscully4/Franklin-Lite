@@ -12,7 +12,7 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { WebClient } from "@slack/web-api";
-import { createLogger } from "./logger.js";
+import { createLogger } from "../logger.js";
 const log = createLogger("slack");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

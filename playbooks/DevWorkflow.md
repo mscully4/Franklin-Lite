@@ -67,6 +67,11 @@ The agent:
 - Does not commit to the default branch
 - Returns a summary of what changed
 
+**Implementation constraints:**
+- **Simplicity** — No features beyond what was asked. No abstractions for single-use code. No error handling for impossible scenarios. If 200 lines could be 50, rewrite it.
+- **Surgical changes** — Every changed line traces to the plan. Don't improve adjacent code, add docstrings to untouched functions, or reformat code you didn't change. Match existing style. Only remove what your changes orphaned.
+- **State assumptions** — If the plan is ambiguous or the code reveals multiple valid approaches, surface them before picking. A mid-implementation question is cheaper than a wrong guess (see Clarification Rule below).
+
 Log the full agent response to the quest log.
 
 ---

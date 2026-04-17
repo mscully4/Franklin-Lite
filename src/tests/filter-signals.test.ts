@@ -57,6 +57,8 @@ describe("githubState", () => {
       ci_failing: ["lint"],
       changes_requested: ["alice"],
       approved: false,
+      mergeable_state: "unknown",
+      review_comments: 0,
     });
   });
 
@@ -69,6 +71,8 @@ describe("githubState", () => {
       ci_failing: [],
       changes_requested: [],
       approved: false,
+      mergeable_state: "unknown",
+      review_comments: 0,
     });
   });
 
@@ -143,7 +147,7 @@ describe("change detection scenarios", () => {
   });
 
   test("CI still failing with same check — states equal (no re-notify)", () => {
-    const prev = { ci_failing: ["lint"], changes_requested: [], approved: false };
+    const prev = { ci_failing: ["lint"], changes_requested: [], approved: false, mergeable_state: "unknown", review_comments: 0 };
     const curr = githubState(makePr({ ci_failing: ["lint"] }));
     assert.ok(statesEqual(prev, curr));
   });

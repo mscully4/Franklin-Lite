@@ -106,6 +106,16 @@ if (githubResult?.status === "ok" || githubResult?.status === "error") {
       if (!statesEqual(current, previous)) {
         signals.push({ id: entry.id, source: "github", is_new: !row, previous_state: previous, current_state: current, entry });
       }
+    } else if (entry.type === "my_activity") {
+      const activityType = (entry.raw as Record<string, unknown>).activity_type as string | undefined;
+      if (activityType === "pr_merged") {
+        // PR merge events surface once — once surfaced, never re-fire (like Gmail)
+        const current = { merged: true };
+        const row = db.getSurfaced(entry.id);
+        if (!row?.last_surfaced_at) {
+          signals.push({ id: entry.id, source: "github", is_new: true, previous_state: {}, current_state: current, entry });
+        }
+      }
     }
   }
 }

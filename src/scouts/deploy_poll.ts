@@ -145,7 +145,9 @@ async function main() {
       if (!cursor) break;
     }
 
-    // Messages come newest-first from conversations.history.
+    // Sort all messages newest-first (pagination with `oldest` param can mix ordering across pages)
+    messages.sort((a, b) => parseFloat(b.ts as string) - parseFloat(a.ts as string));
+
     // Keep only the most recent message per service.
     const seenServices = new Set<string>();
 
@@ -155,13 +157,13 @@ async function main() {
       // Only care about messages that @-mention the owner
       if (!text.includes(`<@${ownerUserId}>`)) continue;
 
-      const reactions = (msg.reactions as Reaction[] | undefined) ?? [];
-      const hasShip = reactions.some((r) => r.name === "ship");
-      if (hasShip) continue; // deployed — don't track
-
       const service = matchesTeamService(text) ?? "unknown";
       if (seenServices.has(service)) continue; // older message for same service — skip
       seenServices.add(service);
+
+      const reactions = (msg.reactions as Reaction[] | undefined) ?? [];
+      const hasShip = reactions.some((r) => r.name === "ship");
+      if (hasShip) continue; // deployed — don't track
 
       const hasThumbsUp = reactions.some(
         (r) => r.name === "+1" && r.users.includes(ownerUserId),

@@ -91,6 +91,7 @@ const SCHEMA = `
     requester       TEXT,
     recommendation  TEXT,
     evidence        TEXT,
+    evidence_at     TEXT,
     message_url     TEXT UNIQUE,
     status          TEXT NOT NULL DEFAULT 'pending',
     created_at      TEXT NOT NULL
@@ -118,6 +119,24 @@ const SCHEMA = `
     PRIMARY KEY (channel_id, user_id)
   );
   CREATE INDEX IF NOT EXISTS channel_user_rules_user ON channel_user_rules(user_id);
+
+  CREATE TABLE IF NOT EXISTS running_tasks (
+    task_id         TEXT PRIMARY KEY,
+    type            TEXT NOT NULL,
+    priority        TEXT NOT NULL,
+    pid             INTEGER,
+    timeout_ms      INTEGER NOT NULL,
+    quest_id        TEXT,
+    dispatched_at   TEXT NOT NULL,
+    mark_surfaced   TEXT,
+    context         TEXT NOT NULL DEFAULT '{}'
+  );
+
+  CREATE TABLE IF NOT EXISTS counters (
+    name             TEXT PRIMARY KEY,
+    value            INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT OR IGNORE INTO counters (name, value) VALUES ('task_id', 0);
 `;
 
 export interface IsAllowedResult {
@@ -141,10 +160,13 @@ export function openDb(path = DB_PATH) {
   db.pragma("journal_mode = WAL");
   db.exec(SCHEMA);
 
-  // Migration: add status column to deploys if missing
+  // Migrations: add columns to deploys if missing
   const deployCols = db.pragma("table_info(deploys)") as Array<{ name: string }>;
   if (!deployCols.some((c) => c.name === "status")) {
     db.exec(`ALTER TABLE deploys ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`);
+  }
+  if (!deployCols.some((c) => c.name === "evidence_at")) {
+    db.exec(`ALTER TABLE deploys ADD COLUMN evidence_at TEXT`);
   }
 
   // Seed default channel policies if the table is empty
@@ -319,6 +341,25 @@ export function openDb(path = DB_PATH) {
     },
 
     /**
+     * Atomically reserve `count` task IDs and return them.
+     * Uses the counters table so IDs are unique across processes.
+     */
+    nextTaskIds(count: number): string[] {
+      const update = db.prepare(`UPDATE counters SET value = value + ? WHERE name = 'task_id'`);
+      const select = db.prepare(`SELECT value FROM counters WHERE name = 'task_id'`);
+      const ids: string[] = [];
+      db.transaction(() => {
+        update.run(count);
+        const row = select.get() as { value: number };
+        const end = row.value;
+        for (let i = count; i >= 1; i--) {
+          ids.push(`task-${String(end - i + 1).padStart(8, "0")}`);
+        }
+      })();
+      return ids;
+    },
+
+    /**
      * Get recent dispatch entries.
      */
     getRecentDispatches(limit = 20): Array<Record<string, unknown>> {
@@ -392,7 +433,7 @@ export function openDb(path = DB_PATH) {
      * Get the next quest ID (max numeric id + 1).
      */
     nextQuestId(): string {
-      const row = db.prepare(`SELECT id FROM quests ORDER BY created_at DESC LIMIT 1`).get() as { id: string } | undefined;
+      const row = db.prepare(`SELECT id FROM quests ORDER BY id DESC LIMIT 1`).get() as { id: string } | undefined;
       const lastNum = row?.id?.match(/(\d+)/)?.[1] ? parseInt(row.id.match(/(\d+)/)![1], 10) : 0;
       return `quest-${String(lastNum + 1).padStart(8, "0")}`;
     },
@@ -450,6 +491,42 @@ export function openDb(path = DB_PATH) {
       return db.prepare(`SELECT * FROM inflight_prs`).all() as Array<{
         signal_id: string; task_id: string; pid: number | null; started_at: string;
       }>;
+    },
+
+    // ── Running tasks ──────────────────────────────────────────────────────
+
+    insertRunningTask(task: {
+      task_id: string; type: string; priority: string; pid: number | null;
+      timeout_ms: number; quest_id: string | null; dispatched_at: string;
+      mark_surfaced: string | null; context: string;
+    }): void {
+      db.prepare(`
+        INSERT OR REPLACE INTO running_tasks (task_id, type, priority, pid, timeout_ms, quest_id, dispatched_at, mark_surfaced, context)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(task.task_id, task.type, task.priority, task.pid, task.timeout_ms, task.quest_id, task.dispatched_at, task.mark_surfaced, task.context);
+    },
+
+    updateRunningTaskPid(taskId: string, pid: number): void {
+      db.prepare(`UPDATE running_tasks SET pid = ? WHERE task_id = ?`).run(pid, taskId);
+    },
+
+    getRunningTasks(): Array<{
+      task_id: string; type: string; priority: string; pid: number | null;
+      timeout_ms: number; quest_id: string | null; dispatched_at: string;
+      mark_surfaced: string | null; context: string;
+    }> {
+      return db.prepare(`SELECT * FROM running_tasks`).all() as ReturnType<typeof this.getRunningTasks>;
+    },
+
+    removeRunningTask(taskId: string): void {
+      db.prepare(`DELETE FROM running_tasks WHERE task_id = ?`).run(taskId);
+    },
+
+    hasRunningTaskWithScheduledId(scheduledTaskId: string): boolean {
+      const row = db.prepare(
+        `SELECT 1 FROM running_tasks WHERE json_extract(context, '$.scheduled_task_id') = ? LIMIT 1`
+      ).get(scheduledTaskId);
+      return !!row;
     },
 
     // ── Metrics ─────────────────────────────────────────────────────────────
@@ -525,10 +602,11 @@ export function openDb(path = DB_PATH) {
       message_url?: string;
     }): void {
       const now = new Date().toISOString();
+      const evidenceAt = entry.evidence ? now : null;
       db.prepare(`
-        INSERT OR REPLACE INTO deploys (id, service, description, requester, recommendation, evidence, message_url, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(entry.id, entry.service, entry.description ?? null, entry.requester ?? null, entry.recommendation ?? null, entry.evidence ?? null, entry.message_url ?? null, now);
+        INSERT OR REPLACE INTO deploys (id, service, description, requester, recommendation, evidence, evidence_at, message_url, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(entry.id, entry.service, entry.description ?? null, entry.requester ?? null, entry.recommendation ?? null, entry.evidence ?? null, evidenceAt, entry.message_url ?? null, now);
     },
 
     /**
@@ -577,6 +655,25 @@ export function openDb(path = DB_PATH) {
       created_at: string;
     }> {
       return db.prepare(`SELECT * FROM deploys ORDER BY created_at DESC LIMIT ?`).all(limit) as ReturnType<typeof this.getRecentDeploys>;
+    },
+
+    getPendingDeploysNeedingReview(): Array<{
+      id: string;
+      service: string;
+      description: string | null;
+      requester: string | null;
+      message_url: string | null;
+      status: string;
+      created_at: string;
+      evidence_at: string | null;
+    }> {
+      const staleThreshold = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+      return db.prepare(
+        `SELECT id, service, description, requester, message_url, status, created_at, evidence_at
+         FROM deploys WHERE status = 'pending'
+           AND (evidence IS NULL OR evidence = '' OR evidence_at < ?)
+         ORDER BY created_at ASC`
+      ).all(staleThreshold) as ReturnType<typeof this.getPendingDeploysNeedingReview>;
     },
 
     pruneDeploys(days = 7): number {

@@ -130,13 +130,15 @@ interface GhEvent {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+const MAX_BUFFER = 10 * 1024 * 1024; // 10 MB — default 1 MB is too small for large PRs
+
 function ghApi<T>(endpoint: string): T {
-  const raw = execSync(`gh api "${endpoint}" --paginate`, { timeout: 30_000 }).toString();
+  const raw = execSync(`gh api "${endpoint}" --paginate`, { timeout: 30_000, maxBuffer: MAX_BUFFER }).toString();
   return JSON.parse(raw) as T;
 }
 
 function ghApiOnePage<T>(endpoint: string): T {
-  const raw = execSync(`gh api "${endpoint}"`, { timeout: 30_000 }).toString();
+  const raw = execSync(`gh api "${endpoint}"`, { timeout: 30_000, maxBuffer: MAX_BUFFER }).toString();
   return JSON.parse(raw) as T;
 }
 
@@ -191,6 +193,15 @@ function getReviewState(
   if (cached) {
     return { ...base, reviewedByMe: true, reviewState: null, headSha, myReviewSha: cached.my_review_sha };
   }
+
+  // Check PR comments for analyze-pr signature — covers reviews posted via the
+  // analyze-pr skill (which uses a comment rather than a formal GitHub review).
+  const comments = ghApiSafe<Array<{ body: string }>>(
+    `/repos/${repo}/issues/${number}/comments?per_page=100`, [], errors);
+  if (comments.some(c => c.body?.includes("<!-- analyze-pr -->"))) {
+    return { ...base, reviewedByMe: true, reviewState: null, headSha, myReviewSha: null };
+  }
+
   return { ...base, reviewedByMe: false, reviewState: null, headSha, myReviewSha: null };
 }
 

@@ -62,18 +62,6 @@ Franklin updates his own prompts and config based on user feedback.
 
 **Proactive updates:** When Franklin notices a gap (failed attempt, repeated edge case, missing instructions), update the file directly and DM the user what was changed and why. Keep changes small and focused — one fix at a time.
 
-**Log all changes:** Append to `state/self_improvement_log.json`:
-```json
-{
-  "id": "update-001",
-  "created_at": "ISO 8601",
-  "source": "quest-id, task-id, or user feedback",
-  "file": "which file was changed",
-  "summary": "One-line description of the change",
-  "rationale": "Why"
-}
-```
-
 **Don't:** expand scope speculatively, remove safety checks, or batch unrelated changes.
 
 ---

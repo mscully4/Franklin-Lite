@@ -9,14 +9,14 @@
  *   3. Usergroup mentions
  *
  * Note: DMs, direct @mentions, and reactions are delivered in real-time by
- * server.js via socket mode → state/slack_inbox.jsonl. This script does not
- * touch that file.
+ * server.ts via socket mode → the slack_inbox DB table.
  *
  * Usage: npx tsx scripts/scouts/slack.ts
  */
 
 import { WebClient, ErrorCode } from "@slack/web-api";
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "fs";
+import { readJson } from "../config.js";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "../db.js";
@@ -111,11 +111,6 @@ async function getClient(): Promise<WebClient> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function readJson<T>(path: string): T | null {
-  try { return JSON.parse(readFileSync(path, "utf8")) as T; }
-  catch { return null; }
-}
 
 function dateStr(offsetDays: number): string {
   const d = new Date(Date.now() - offsetDays * 86_400_000);

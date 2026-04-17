@@ -33,6 +33,23 @@ export const SCOUT_INTERVALS_MS: Record<string, number> = {
   deploy_poll: 5 * 60 * 1000,
 };
 
+/** Default task timeouts by type. Brain can override with `timeout` on any task. */
+export const DEFAULT_TIMEOUT_BY_TYPE: Record<string, number> = {
+  dm_reply:        10 * 60_000,  // 10 min
+  email_notify:     5 * 60_000,  //  5 min
+  jira_update:      5 * 60_000,  //  5 min
+  pr_monitor:      60 * 60_000,  // 60 min
+  quest:           60 * 60_000,  // 60 min
+  scheduled:       10 * 60_000,  // 10 min
+};
+
+const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000; // fallback for unknown types
+
+/** Resolve effective timeout for a task. */
+export function resolveTaskTimeout(task: { type: string; timeout?: number }): number {
+  return task.timeout ?? DEFAULT_TIMEOUT_BY_TYPE[task.type] ?? DEFAULT_TASK_TIMEOUT_MS;
+}
+
 // ── Shared interfaces (Phase 2 — not yet schema-ified) ──────────────────────
 
 export interface DispatchLogEntry {

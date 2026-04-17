@@ -22,7 +22,8 @@ export const DelegationTaskSchema = z.object({
       id: z.string(),
       state: z.record(z.string(), z.any()),
     })
-    .nullable(),
+    .nullable()
+    .optional(),
 });
 
 export type DelegationTask = z.infer<typeof DelegationTaskSchema>;
@@ -49,8 +50,11 @@ export const ScheduledTaskSchema = z.object({
   kind: z.enum(["worker", "script"]).optional(),
   command: z.string().optional(),
   timeout: z.number().optional(),
+  display_description: z.string().optional(),
   context: z.record(z.string(), z.any()),
-  last_run: z.string().optional(),
+  last_run: z.string().nullable().optional(),
+  fail_count: z.number().optional(),
+  last_fail: z.string().nullable().optional(),
 });
 
 export type ScheduledTask = z.infer<typeof ScheduledTaskSchema>;
@@ -61,6 +65,7 @@ export const SettingsSchema = z.object({
   name: z.string(),
   mode: z.string(),
   owner_user_id: z.string().optional(),
+  timezone: z.string().optional(),
   avatar: z.string().optional(),
   user_profile: z.object({
     name: z.string(),
