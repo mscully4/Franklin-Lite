@@ -37,7 +37,7 @@ franklin.ts (supervisor, 30-second cycles)
 
 **Brain** reads the filtered signals and writes `state/delegation.json` — a list of tasks to execute.
 
-**Workers** are autonomous Claude agents that receive a task and figure out how to do it. They have access to MCP tools (Slack, GitHub, Jira, Datadog, etc.), a global skills library (`~/DevEnv/skills/`), and playbooks for complex workflows.
+**Workers** are autonomous Claude agents that receive a task and figure out how to do it. They have access to MCP tools (Slack, GitHub, Jira, Datadog, etc.), a global skills library (`~/DevEnv/skills/`), playbooks for complex workflows, and the `pi-db-query` skill for read-only database lookups when a task requires it.
 
 **Quest agents** handle multi-step work: create a branch, write code, open a PR, babysit CI, and report back. See `playbooks/DevWorkflow.md`.
 
@@ -107,6 +107,24 @@ You can also DM Franklin to add/remove scheduled tasks.
 
 ---
 
+## Docker Port Isolation
+
+When workers run integration tests across multiple repos in parallel, Docker host ports can conflict (e.g. two repos both binding postgres on `5432`). Franklin assigns each worker a unique loopback IP (`127.0.0.2`–`127.0.0.254`) and generates a `docker-compose.override.yml` that rebinds all published ports to that IP, keeping workers fully isolated.
+
+**One-time macOS setup** (loopback aliases survive reboots):
+
+```bash
+sudo bash scripts/setup-loopback.sh
+```
+
+On Linux, all `127.x.x.x` addresses are already routable — no setup needed.
+
+**Per-repo config** lives in `knowledge/repos/<repo-name>/docker.md`. Each file declares the env vars that need the IP substituted (e.g. `APP_CONFIG_OPTION_PG_URL={ip}:5432`) and any repo-specific notes. It can also set `skip_docker: true` to opt that repo out.
+
+**Feature flag** — `feature_flags.skip_docker` in `state/settings.json` disables Docker startup globally (workers skip containers and push to CI instead).
+
+---
+
 ## Dashboard
 
 `http://localhost:7070` — auto-starts with Franklin.
@@ -148,9 +166,15 @@ modes/
 playbooks/
   DevWorkflow.md               # End-to-end dev workflow
 scripts/
+  setup-loopback.sh            # One-time macOS loopback alias setup (run with sudo)
+src/
   db.ts                        # SQLite schema and helpers
+  docker_override.ts           # Docker compose override generator for port isolation
   filter-signals.ts            # Dedup and state-diff
   slack_send.ts                # Send messages/reactions as Franklin bot
+  scripts/
+    docker_claim.ts            # Claim a loopback IP for a worker
+    docker_release.ts          # Release IP and remove compose override
   scouts/
     github.ts                  # GitHub scout
     jira.ts                    # Jira scout
@@ -159,14 +183,15 @@ scripts/
 state/
   settings.json                # Personal config (gitignored)
   scheduled_tasks.json         # Recurring task definitions
-  franklin.db                  # SQLite — quests, dispatch log, signals
+  franklin.db                  # SQLite — quests, dispatch log, signals, IP pool
   quests/active/               # In-flight quests
   quests/completed/            # Done
   scout_results/               # Latest scout output
   brain_input/                 # Filtered signals for the brain
   worker_results/              # Worker output
 secrets/                       # Tokens (gitignored)
-knowledge/                     # Domain knowledge (symlink)
+knowledge/                     # Domain knowledge (symlink, gitignored)
+  repos/<repo>/docker.md       # Per-repo Docker config and flags
 references/                    # Tool guides (symlink)
 ```
 
@@ -183,5 +208,14 @@ npm install
 cp state/settings.example.json state/settings.json
 # Edit settings.json with your info
 # Add Slack tokens to secrets/
+sudo bash scripts/setup-loopback.sh  # macOS only, one-time
 npx tsx franklin.ts
 ```
+
+Key `state/settings.json` fields:
+
+| Field | Description |
+|-------|-------------|
+| `owner_user_id` | Your Slack user ID |
+| `timezone` | Your timezone (e.g. `America/Chicago`) |
+| `feature_flags.skip_docker` | `true` to skip Docker startup globally — workers push to CI instead |
