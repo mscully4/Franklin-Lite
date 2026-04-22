@@ -38,6 +38,7 @@ const SCHEMA = `
     type         TEXT NOT NULL,
     reaction     TEXT,
     text         TEXT,
+    thread_ts    TEXT,
     raw          TEXT NOT NULL,
     received_at  TEXT NOT NULL,
     processed    INTEGER NOT NULL DEFAULT 0
@@ -129,7 +130,8 @@ const SCHEMA = `
     quest_id        TEXT,
     dispatched_at   TEXT NOT NULL,
     mark_surfaced   TEXT,
-    context         TEXT NOT NULL DEFAULT '{}'
+    context         TEXT NOT NULL DEFAULT '{}',
+    assigned_ip     TEXT
   );
 
   CREATE TABLE IF NOT EXISTS counters (
@@ -160,6 +162,12 @@ export function openDb(path = DB_PATH) {
   db.pragma("journal_mode = WAL");
   db.exec(SCHEMA);
 
+  // Migration: add thread_ts to slack_inbox if missing
+  const inboxCols = db.pragma("table_info(slack_inbox)") as Array<{ name: string }>;
+  if (!inboxCols.some((c) => c.name === "thread_ts")) {
+    db.exec(`ALTER TABLE slack_inbox ADD COLUMN thread_ts TEXT`);
+  }
+
   // Migrations: add columns to deploys if missing
   const deployCols = db.pragma("table_info(deploys)") as Array<{ name: string }>;
   if (!deployCols.some((c) => c.name === "status")) {
@@ -167,6 +175,12 @@ export function openDb(path = DB_PATH) {
   }
   if (!deployCols.some((c) => c.name === "evidence_at")) {
     db.exec(`ALTER TABLE deploys ADD COLUMN evidence_at TEXT`);
+  }
+
+  // Migration: add assigned_ip to running_tasks if missing
+  const runningCols = db.pragma("table_info(running_tasks)") as Array<{ name: string }>;
+  if (!runningCols.some((c) => c.name === "assigned_ip")) {
+    db.exec(`ALTER TABLE running_tasks ADD COLUMN assigned_ip TEXT`);
   }
 
   // Seed default channel policies if the table is empty
@@ -254,13 +268,14 @@ export function openDb(path = DB_PATH) {
       type: string;
       reaction?: string;
       text?: string;
+      thread_ts?: string;
       raw: Record<string, unknown>;
     }): void {
       const now = new Date().toISOString();
       db.prepare(`
         INSERT OR IGNORE INTO slack_inbox
-          (event_ts, channel, channel_type, user_id, type, reaction, text, raw, received_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (event_ts, channel, channel_type, user_id, type, reaction, text, thread_ts, raw, received_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         event.event_ts,
         event.channel,
@@ -269,6 +284,7 @@ export function openDb(path = DB_PATH) {
         event.type,
         event.reaction ?? null,
         event.text ?? null,
+        event.thread_ts ?? null,
         JSON.stringify(event.raw),
         now,
       );
@@ -285,6 +301,7 @@ export function openDb(path = DB_PATH) {
       type: string;
       reaction: string | null;
       text: string | null;
+      thread_ts: string | null;
       raw: Record<string, unknown>;
       received_at: string;
     }> {
@@ -513,13 +530,39 @@ export function openDb(path = DB_PATH) {
     getRunningTasks(): Array<{
       task_id: string; type: string; priority: string; pid: number | null;
       timeout_ms: number; quest_id: string | null; dispatched_at: string;
-      mark_surfaced: string | null; context: string;
+      mark_surfaced: string | null; context: string; assigned_ip: string | null;
     }> {
       return db.prepare(`SELECT * FROM running_tasks`).all() as ReturnType<typeof this.getRunningTasks>;
     },
 
     removeRunningTask(taskId: string): void {
       db.prepare(`DELETE FROM running_tasks WHERE task_id = ?`).run(taskId);
+    },
+
+    /**
+     * Atomically claim the lowest available loopback IP (127.0.0.2–127.0.0.254)
+     * for the given task. Returns the claimed IP, or null if the pool is exhausted.
+     */
+    claimDockerIp(taskId: string): string | null {
+      let ip: string | null = null;
+      db.transaction(() => {
+        const claimed = new Set(
+          (db.prepare(`SELECT assigned_ip FROM running_tasks WHERE assigned_ip IS NOT NULL`).all() as Array<{ assigned_ip: string }>)
+            .map(r => r.assigned_ip)
+        );
+        for (let i = 2; i <= 254; i++) {
+          const candidate = `127.0.0.${i}`;
+          if (!claimed.has(candidate)) { ip = candidate; break; }
+        }
+        if (ip) {
+          db.prepare(`UPDATE running_tasks SET assigned_ip = ? WHERE task_id = ?`).run(ip, taskId);
+        }
+      })();
+      return ip;
+    },
+
+    releaseDockerIp(taskId: string): void {
+      db.prepare(`UPDATE running_tasks SET assigned_ip = NULL WHERE task_id = ?`).run(taskId);
     },
 
     hasRunningTaskWithScheduledId(scheduledTaskId: string): boolean {

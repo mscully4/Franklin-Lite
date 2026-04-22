@@ -86,9 +86,15 @@ export type Settings = z.infer<typeof SettingsSchema>;
 
 // ── Delegation (wrapper used in delegation.json) ────────────────────────────
 
+const MarkSurfacedEntrySchema = z.object({
+  id: z.string(),
+  state: z.record(z.string(), z.any()),
+});
+
 export const DelegationSchema = z.object({
   generated_at: z.string(),
   tasks: z.array(DelegationTaskSchema),
+  mark_surfaced_only: z.array(MarkSurfacedEntrySchema).optional(),
 });
 
 export type Delegation = z.infer<typeof DelegationSchema>;
