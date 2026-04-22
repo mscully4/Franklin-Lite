@@ -304,6 +304,12 @@
         .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    async function toggleClaim(signalId, currently_claimed) {
+      const method = currently_claimed ? 'DELETE' : 'POST';
+      await fetch('/api/claim-pr', { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify({ signalId }) });
+      refresh();
+    }
+
     function slackAppUrl(permalink) {
       const m = permalink && permalink.match(/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})/);
       if (!m) return permalink;
@@ -630,16 +636,19 @@
         'awaiting review':  { icon: '👀', cls: 'tag-purple' },
       };
       const inflightSet = new Set(d.inflightPrs ?? []);
+      const claimedSet = new Set(d.claimedPrs ?? []);
       const prRows = (d.openPrs ?? []).map(pr => {
         const s = PR_STATUS[pr.status] ?? { icon: '❓', cls: 'tag-blue' };
         const signalId = `github:pr:crcl-main/${pr.repo}/${pr.number}`;
         const working = inflightSet.has(signalId) ? ' 🦝' : '';
         const approved = pr.approved ? ' ✓' : '';
+        const claimed = claimedSet.has(signalId);
+        const claimBtn = `<button onclick="toggleClaim('${signalId}', ${claimed})" style="background:none;border:none;cursor:pointer;font-size:10px;color:var(--muted);padding:0 2px" title="${claimed ? 'Release — let Franklin handle' : 'Claim — I\'ll handle this'}">${claimed ? '🔒' : '🔓'}</button>`;
         return `
-          <div class="side-row" style="font-size:11px">
+          <div class="side-row" style="font-size:11px${claimed ? ';opacity:0.5' : ''}">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span><span title="${esc(pr.status)}">${s.icon}</span> <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue)">${esc(pr.repo)}#${pr.number}</a></span>
-              <span style="color:var(--muted)">${approved}${working}</span>
+              <span style="color:var(--muted)">${approved}${working}${claimBtn}</span>
             </div>
           </div>
         `;

@@ -21,6 +21,7 @@ state/brain_input/signals.json          changed stateful signals (github, jira, 
 state/brain_input/slack_inbox.json      unprocessed Slack inbox events
 state/brain_input/inflight_signals.json  signals with active tasks (array of signal_ids)
 state/brain_input/pending_deploys.json  deploys needing review (pending, no evidence yet)
+state/user_claimed_prs.json             PRs the user is handling locally (skip entirely)
 state/settings.json                     user identity, authorized_users
 state/slack_socket.json                 socket mode health
 state/last_run.json                     timestamps from last cycle
@@ -105,7 +106,11 @@ For each signal with `source: "github"`:
 
 ### Step 4a — Deduplication check
 
-**Before doing anything**, check `state/brain_input/inflight_signals.json`. This is an array of signal_ids (e.g. `["github:pr:crcl-main/repo/123"]`) where a task is already running. If the signal's `id` is in this list, **skip it entirely** — do not emit any task.
+**Before doing anything**, check both skip lists:
+- `state/brain_input/inflight_signals.json` — signal_ids with a task already running
+- `state/user_claimed_prs.json` — PRs the user has claimed to handle themselves
+
+If the signal's `id` appears in either list, **skip it entirely** — do not emit any task.
 
 ### Step 4b — Evaluate state
 
@@ -135,9 +140,9 @@ Franklin proactively manages authored PRs to keep them in a reviewable state. **
 
 5. **Approved and ready** (`approved === true` AND `ci_failing` is empty AND `mergeable_state === "clean"`): emit a **quest** that **DMs the user** that the PR is ready to merge. **Never auto-merge.** Merging requires human approval.
 
-6. **No action needed**: emit a **no-op script task** to advance `mark_surfaced` so the signal doesn't re-fire:
+6. **No action needed**: add an entry to `mark_surfaced_only` (not a task) so the signal doesn't re-fire without wasting a dispatch:
    ```json
-   { "type": "pr_monitor", "kind": "script", "command": "echo 'no action needed'", "context": { "signal_id": "...", "reason": "no action needed" }, "mark_surfaced": { "id": "...", "state": { ...current_state... } } }
+   { "id": "github:pr:crcl-main/repo/123", "state": { ...current_state... } }
    ```
 
 **Quest objective framing:** Be explicit about what the quest agent should do. Example: `"Get PR #656 (crcl-main/credits-manager) back to a reviewable state. Fix CI failures: [lint, test]. Address 3 new review comments."` Not just "monitor PR."
@@ -167,9 +172,9 @@ For signals where `entry.type === "review_request"`:
     "mark_surfaced": { "id": "github:pr:crcl-main/repo/123", "state": { "reviewed_by_me": false } }
   }
   ```
-- If `current_state.reviewed_by_me === true` → no action. Emit a no-op to advance `mark_surfaced`:
+- If `current_state.reviewed_by_me === true` → no action. Add to `mark_surfaced_only` so it doesn't re-fire:
   ```json
-  { "type": "pr_monitor", "kind": "script", "command": "echo 'already reviewed'", "context": { "signal_id": "...", "reason": "already reviewed by me" }, "mark_surfaced": { "id": "...", "state": { "reviewed_by_me": true } } }
+  { "id": "github:pr:crcl-main/repo/123", "state": { "reviewed_by_me": true } }
   ```
 
 Each PR is reviewed once. The GitHub scout tracks `reviewed_by_me` via the `reviewed_prs` cursor — once Franklin submits a review, this flips to `true` and the signal won't re-fire.
@@ -338,9 +343,14 @@ Write `state/delegation.json`. Always write the file even if `tasks` is empty.
       "context": { },
       "mark_surfaced": null
     }
+  ],
+  "mark_surfaced_only": [
+    { "id": "signal_id", "state": { "...": "..." } }
   ]
 }
 ```
+
+`mark_surfaced_only` — signals that need no action but should be marked as surfaced so they don't re-fire. Use this instead of no-op script tasks (e.g., "no action needed", "already reviewed"). No task is dispatched; the supervisor updates the DB directly.
 
 Task IDs are sequential within this run: `task-001`, `task-002`, etc.
 

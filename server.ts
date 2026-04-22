@@ -15,7 +15,10 @@ const PORT = 7070;
 const GITHUB_ORG = "crcl-main";
 
 const app = express();
+app.use(express.json());
 const db = openDb();
+
+const CLAIMED_PRS_FILE = join(STATE, "user_claimed_prs.json");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -244,6 +247,7 @@ app.get("/api/state", (_req, res) => {
     openPrs,
     reviewRequests,
     inflightPrs,
+    claimedPrs: readJson<string[]>(CLAIMED_PRS_FILE) ?? [],
     jiraTickets,
     deploys,
     channelPolicies: db.listChannelPolicies(),
@@ -251,6 +255,26 @@ app.get("/api/state", (_req, res) => {
     slackInboxPending: pending,
     serverTime: new Date().toISOString(),
   });
+});
+
+// ── Claimed PRs API ──────────────────────────────────────────────────────────
+
+app.post("/api/claim-pr", (req, res) => {
+  const { signalId } = req.body as { signalId?: string };
+  if (!signalId) return res.status(400).json({ error: "signalId required" });
+  const claimed = new Set(readJson<string[]>(CLAIMED_PRS_FILE) ?? []);
+  claimed.add(signalId);
+  writeFileSync(CLAIMED_PRS_FILE, JSON.stringify([...claimed], null, 2));
+  res.json({ ok: true });
+});
+
+app.delete("/api/claim-pr", (req, res) => {
+  const { signalId } = req.body as { signalId?: string };
+  if (!signalId) return res.status(400).json({ error: "signalId required" });
+  const claimed = new Set(readJson<string[]>(CLAIMED_PRS_FILE) ?? []);
+  claimed.delete(signalId);
+  writeFileSync(CLAIMED_PRS_FILE, JSON.stringify([...claimed], null, 2));
+  res.json({ ok: true });
 });
 
 // ── Metrics API ──────────────────────────────────────────────────────────────
@@ -432,6 +456,9 @@ function handleSlackEvent(event: Record<string, unknown>): void {
 
   slog(`[socket] ${type} channel=${channel} channel_type=${channelType} user=${event.user ?? "?"} ts=${eventTs}`);
 
+  const rawThreadTs = event.thread_ts as string | undefined;
+  const threadTs = rawThreadTs && rawThreadTs !== eventTs ? rawThreadTs : undefined;
+
   db.insertSlackEvent({
     event_ts: eventTs,
     channel,
@@ -440,6 +467,7 @@ function handleSlackEvent(event: Record<string, unknown>): void {
     type,
     reaction: event.reaction as string | undefined,
     text: event.text as string | undefined,
+    thread_ts: threadTs,
     raw: event,
   });
 
