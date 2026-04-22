@@ -91,6 +91,14 @@
     .tag-purple { background: rgba(188,140,255,.15); color: var(--purple); }
     .tag-cyan { background: rgba(57,210,192,.15); color: var(--cyan); }
     .tag-orange { background: rgba(240,136,62,.15); color: var(--orange); }
+    .claim-btn {
+      display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px;
+      font-weight: 600; letter-spacing: 0.3px; cursor: pointer; border: none;
+      font-family: inherit;
+    }
+    .claim-btn.unclaimed { background: rgba(139,148,158,.1); color: var(--muted); }
+    .claim-btn.unclaimed:hover { background: rgba(139,148,158,.25); color: var(--text); }
+    .claim-btn.claimed { background: rgba(210,153,34,.15); color: var(--yellow); }
 
     .row {
       display: flex;
@@ -643,7 +651,7 @@
         const working = inflightSet.has(signalId) ? ' 🦝' : '';
         const approved = pr.approved ? ' ✓' : '';
         const claimed = claimedSet.has(signalId);
-        const claimBtn = `<button onclick="toggleClaim('${signalId}', ${claimed})" style="background:none;border:none;cursor:pointer;font-size:10px;color:var(--muted);padding:0 2px" title="${claimed ? 'Release — let Franklin handle' : 'Claim — I\'ll handle this'}">${claimed ? '🔒' : '🔓'}</button>`;
+        const claimBtn = `<button onclick="toggleClaim('${signalId}', ${claimed})" class="claim-btn ${claimed ? 'claimed' : 'unclaimed'}" title="${claimed ? 'Release — let Franklin handle' : 'Claim — I\'ll handle this'}">${claimed ? 'claimed' : 'claim'}</button>`;
         return `
           <div class="side-row" style="font-size:11px${claimed ? ';opacity:0.5' : ''}">
             <div style="display:flex;justify-content:space-between;align-items:center">
