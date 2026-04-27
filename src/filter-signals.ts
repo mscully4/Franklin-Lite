@@ -168,10 +168,10 @@ if (gmailResult?.status === "ok" || gmailResult?.status === "error") {
 //   2. Known handler channel but no match → drop (noise that doesn't involve owner)
 //   3. No handler for channel → slack_inbox.json (DM task generation)
 
-const settings = readJson<{ owner_user_id?: string; user_profile?: { slack_user_id?: string } }>(
+const settings = readJson<{ user_profile?: { telegram_user_id?: number } }>(
   join(ROOT, "state", "settings.json")
 );
-const ownerUserId = settings?.owner_user_id ?? settings?.user_profile?.slack_user_id ?? "";
+const ownerUserId = String(settings?.user_profile?.telegram_user_id ?? "");
 
 const pendingEvents = db.getPendingSlackEvents();
 const handlerChannels = new Set(CHANNEL_SIGNAL_HANDLERS.map((h) => h.channel));
