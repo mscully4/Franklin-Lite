@@ -1,9 +1,8 @@
 import express from "express";
-import { readFileSync, readdirSync, writeFileSync, appendFileSync, existsSync, unlinkSync } from "fs";
+import { readFileSync, readdirSync, writeFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { SocketModeClient } from "@slack/socket-mode";
-import { WebClient } from "@slack/web-api";
+import { Bot } from "grammy";
 import { openDb } from "./src/db.js";
 import { SCOUT_INTERVALS_MS, readJson } from "./src/config.js";
 import { createLogger } from "./src/logger.js";
@@ -124,8 +123,8 @@ app.get("/api/state", (_req, res) => {
     .map((e) => ({ title: e.title, start: e.start, end: e.end, location: e.location ?? "", meetingUrl: e.meetingUrl ?? "", notified: e.notified ?? false, transcript_available: e.transcript_available ?? false }))
     .slice(0, 8);
 
-  // Socket status
-  const socketData = readJson<{ status: string; updated_at: string }>(join(STATE, "slack_socket.json"));
+  // Telegram bot status
+  const socketData = readJson<{ status: string; updated_at: string }>(join(STATE, "telegram_bot.json"));
   const socketStatus = socketData?.status ?? "unknown";
   const socketStale = isStale(socketData?.updated_at ?? null, 300);
 
@@ -337,203 +336,63 @@ app.listen(PORT, "127.0.0.1", () => {
   log.info(`Franklin dashboard → http://localhost:${PORT}`);
 });
 
-// ── Socket Mode ───────────────────────────────────────────────────────────────
+// ── Telegram Bot (long polling) ───────────────────────────────────────────────
 
-const SOCKET_TOKEN_FILE = join(__dirname, "secrets", "franklin_socket_token.txt");
-const BOT_TOKEN_FILE = join(__dirname, "secrets", "franklin_bot_oauth_token.txt");
-const SOCKET_HEARTBEAT_FILE = join(STATE, "slack_socket.json");
-const SOCKET_LOCK_FILE = join(STATE, "socket.lock");
-const SERVER_LOG = join(STATE, "server.log");
+const TELEGRAM_TOKEN_FILE = join(__dirname, "secrets", "telegram_bot_token.txt");
+const TELEGRAM_HEARTBEAT_FILE = join(STATE, "telegram_bot.json");
 
-function acquireSocketLock(): boolean {
-  if (existsSync(SOCKET_LOCK_FILE)) {
-    const pid = parseInt(readFileSync(SOCKET_LOCK_FILE, "utf8").trim(), 10);
-    if (!isNaN(pid)) {
-      try {
-        process.kill(pid, 0); // throws if process is dead
-        log.warn(`Socket lock held by pid ${pid} — skipping socket startup`);
-        return false;
-      } catch {
-        // stale lock, proceed
-      }
-    }
-  }
-  writeFileSync(SOCKET_LOCK_FILE, String(process.pid));
-  return true;
+function writeTelegramHeartbeat(status: string): void {
+  writeFileSync(
+    TELEGRAM_HEARTBEAT_FILE,
+    JSON.stringify({ status, updated_at: new Date().toISOString() }) + "\n",
+  );
 }
 
-function releaseSocketLock(): void {
-  try {
-    if (existsSync(SOCKET_LOCK_FILE)) {
-      const pid = parseInt(readFileSync(SOCKET_LOCK_FILE, "utf8").trim(), 10);
-      if (pid === process.pid) unlinkSync(SOCKET_LOCK_FILE);
-    }
-  } catch { /* ignore */ }
-}
+if (existsSync(TELEGRAM_TOKEN_FILE)) {
+  const telegramToken = readFileSync(TELEGRAM_TOKEN_FILE, "utf8").trim();
 
-process.on("exit", releaseSocketLock);
-process.on("SIGINT", () => { releaseSocketLock(); process.exit(0); });
-process.on("SIGTERM", () => { releaseSocketLock(); process.exit(0); });
+  const settingsForAuth = readJson<{
+    authorized_users?: Array<{ telegram_user_id?: number }>;
+  }>(join(STATE, "settings.json"));
+  const authorizedTelegramIds = new Set(
+    (settingsForAuth?.authorized_users ?? [])
+      .map((u) => u.telegram_user_id)
+      .filter((id): id is number => typeof id === "number"),
+  );
 
-// slog replaced by tslog — keeping as alias for minimal diff on socket handlers
-function slog(msg: string): void {
-  log.info(msg);
-}
+  const telegramBot = new Bot(telegramToken);
 
-// ── Slack bot client for reactions ────────────────────────────────────────────
+  telegramBot.on("message", (ctx) => {
+    const msg = ctx.message;
+    const fromId = msg.from?.id;
+    if (!fromId || !authorizedTelegramIds.has(fromId)) return;
 
-let botClient: WebClient | null = null;
-if (existsSync(BOT_TOKEN_FILE)) {
-  botClient = new WebClient(readFileSync(BOT_TOKEN_FILE, "utf8").trim());
-}
+    writeTelegramHeartbeat("connected");
+    log.info(`[telegram] message from=${fromId} chat=${msg.chat.id} text=${(msg.text ?? "").slice(0, 80)}`);
 
-async function reactIfAllowed(event: Record<string, unknown>): Promise<void> {
-  if (!botClient) return;
-  const userId = event.user as string | undefined;
-  if (!userId) return;
-
-  const channel = event.channel as string | undefined;
-  const channelType = (event.channel_type as string) ?? "channel";
-  const ts = (event.event_ts ?? event.ts) as string | undefined;
-  if (!channel || !ts) return;
-
-  // Build authorization context from settings
-  let ownerId: string | undefined;
-  let authorizedIds = new Set<string>();
-  try {
-    const settings = JSON.parse(readFileSync(join(STATE, "settings.json"), "utf8"));
-    ownerId = settings.owner_user_id ?? settings.user_profile?.slack_user_id;
-    authorizedIds = new Set((settings.authorized_users ?? []).map((u: { slack_user_id: string }) => u.slack_user_id));
-  } catch { /* fall through with empty sets */ }
-
-  if (!ownerId) return;
-
-  const result = db.isAllowed(channel, channelType, userId, ownerId, authorizedIds);
-  if (!result.allowed) return;
-
-  // Respect trigger mode: only react to @mentions unless policy is "all"
-  if (result.triggerMode === "mention") {
-    const eventType = event.type as string;
-    const isDM = channelType === "im";
-    const isAppMention = eventType === "app_mention";
-    const isWhiskey = eventType === "reaction_added" && event.reaction === "whiskey";
-    if (!isDM && !isAppMention && !isWhiskey) return;
-  }
-
-  try {
-    await botClient.reactions.add({ channel, name: "raccoon", timestamp: ts });
-    slog(`[react] raccoon channel=${channel} ts=${ts}`);
-  } catch (err: unknown) {
-    const code = (err as { data?: { error?: string } })?.data?.error;
-    if (code !== "already_reacted") slog(`[react] failed: ${code}`);
-  }
-}
-
-function writeSocketHeartbeat(status: string): void {
-  writeFileSync(SOCKET_HEARTBEAT_FILE, JSON.stringify({ status, updated_at: new Date().toISOString() }) + "\n");
-}
-
-function handleSlackEvent(event: Record<string, unknown>): void {
-  writeSocketHeartbeat("connected");
-  const eventTs = (event.event_ts ?? event.ts) as string;
-  if (!eventTs) {
-    slog(`[socket] event missing event_ts, skipping: ${JSON.stringify(event).slice(0, 100)}`);
-    return;
-  }
-
-  const type = event.type as string;
-
-  if (type === "reaction_added" && event.reaction === "raccoon") return;
-
-  // Ignore Franklin's own outbound messages — the MCP Slack tool appends this suffix
-  const text = (event.text as string) ?? "";
-  if (text.includes("*Sent using*")) return;
-
-  // For reaction_added, Slack nests channel inside event.item
-  const item = (type === "reaction_added" ? event.item : null) as Record<string, unknown> | null;
-  const channel = (event.channel as string) ?? (item?.channel as string) ?? "";
-  const channelType = (event.channel_type as string) ?? "channel";
-
-  slog(`[socket] ${type} channel=${channel} channel_type=${channelType} user=${event.user ?? "?"} ts=${eventTs}`);
-
-  const rawThreadTs = event.thread_ts as string | undefined;
-  const threadTs = rawThreadTs && rawThreadTs !== eventTs ? rawThreadTs : undefined;
-
-  db.insertSlackEvent({
-    event_ts: eventTs,
-    channel,
-    channel_type: channelType,
-    user_id: event.user as string | undefined,
-    type,
-    reaction: event.reaction as string | undefined,
-    text: event.text as string | undefined,
-    thread_ts: threadTs,
-    raw: event,
+    db.insertSlackEvent({
+      event_ts: String(msg.date),
+      channel: String(msg.chat.id),
+      channel_type: "im",
+      user_id: String(fromId),
+      type: "message",
+      text: msg.text,
+      thread_ts: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
+      raw: msg as unknown as Record<string, unknown>,
+    });
   });
 
-  // React immediately — but not to Franklin's own outbound messages
-  if (!text.includes("*Sent using*")) {
-    reactIfAllowed(event).catch(() => {});
-  }
-}
-
-if (existsSync(SOCKET_TOKEN_FILE) && acquireSocketLock()) {
-  const appToken = readFileSync(SOCKET_TOKEN_FILE, "utf8").trim();
-  const socketClient = new SocketModeClient({ appToken, pingPongMaxTimeoutMs: 10_000 });
-
-  socketClient.on("message", async ({ event, ack }) => {
-    await ack();
-    try {
-      handleSlackEvent(event as Record<string, unknown>);
-    } catch (err: unknown) {
-      slog(`[socket] handleSlackEvent error (message): ${(err as Error).message}`);
-    }
+  telegramBot.catch((err) => {
+    log.error(`[telegram] error: ${err.message}`);
+    writeTelegramHeartbeat("error");
   });
 
-  socketClient.on("app_mention", async ({ event, ack }) => {
-    await ack();
-    try {
-      handleSlackEvent(event as Record<string, unknown>);
-    } catch (err: unknown) {
-      slog(`[socket] handleSlackEvent error (app_mention): ${(err as Error).message}`);
-    }
-  });
-
-  socketClient.on("reaction_added", async ({ event, ack }) => {
-    await ack();
-    try {
-      handleSlackEvent(event as Record<string, unknown>);
-    } catch (err: unknown) {
-      slog(`[socket] handleSlackEvent error (reaction_added): ${(err as Error).message}`);
-    }
-  });
-
-  let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-
-  socketClient.on("connected", () => {
-    slog("[socket] connected");
-    writeSocketHeartbeat("connected");
-    // Keep heartbeat fresh even when no messages arrive
-    if (heartbeatInterval) clearInterval(heartbeatInterval);
-    heartbeatInterval = setInterval(() => writeSocketHeartbeat("connected"), 60_000);
-  });
-
-  socketClient.on("disconnected", (reason?: string) => {
-    slog(`[socket] disconnected reason=${reason ?? "unknown"}`);
-    writeSocketHeartbeat("disconnected");
-    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-  });
-
-  socketClient.on("error", (err: Error) => {
-    slog(`[socket] error: ${err.message} stack=${err.stack?.split("\n")[1]?.trim()}`);
-    writeSocketHeartbeat("error");
-    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-  });
-
-  socketClient.start().catch((err: Error) => {
-    log.error("Slack socket failed to start:", err.message);
-    writeSocketHeartbeat("error");
+  telegramBot.start({
+    onStart: () => {
+      log.info("[telegram] bot started (long polling)");
+      writeTelegramHeartbeat("connected");
+    },
   });
 } else {
-  log.warn("Slack socket token not found — socket mode disabled.");
+  log.warn("Telegram bot token not found — Telegram bot disabled.");
 }
