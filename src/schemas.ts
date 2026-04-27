@@ -69,17 +69,19 @@ export const SettingsSchema = z.object({
   avatar: z.string().optional(),
   user_profile: z.object({
     name: z.string(),
-    slack_user_id: z.string(),
+    telegram_user_id: z.number().int(),
+    telegram_chat_id: z.number().int(),
     tone: z.string(),
   }),
   authorized_users: z.array(
     z.object({
       name: z.string(),
-      slack_user_id: z.string(),
+      telegram_user_id: z.number().int(),
     }),
   ),
   integrations: z.array(z.string()),
   disabled_scouts: z.array(z.string()).optional(),
+  feature_flags: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

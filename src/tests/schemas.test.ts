@@ -130,21 +130,24 @@ describe("ScheduledTaskSchema", () => {
 });
 
 describe("SettingsSchema", () => {
-  test("accepts real settings shape", () => {
+  test("accepts real settings shape with telegram fields", () => {
     const data = {
       name: "Franklin", mode: "allow_send", avatar: "Franklin.jpg",
-      user_profile: { name: "Michael Scully", slack_user_id: "U09TE8XTM9A", tone: "curt but witty" },
-      authorized_users: [{ name: "michael-scully", slack_user_id: "U09TE8XTM9A" }],
-      integrations: ["slack", "jira", "github", "gws"],
+      user_profile: { name: "Mike", telegram_user_id: 123456789, telegram_chat_id: 123456789, tone: "curt but witty" },
+      authorized_users: [{ name: "mike", telegram_user_id: 123456789 }],
+      integrations: ["telegram", "jira", "github", "gws"],
     };
     assert.ok(SettingsSchema.safeParse(data).success);
   });
 
-  test("accepts settings without optional fields", () => {
+  test("accepts multiple authorized users", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      user_profile: { name: "Test", slack_user_id: "U123", tone: "pro" },
-      authorized_users: [{ name: "test", slack_user_id: "U123" }],
+      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
+      authorized_users: [
+        { name: "mike", telegram_user_id: 111 },
+        { name: "alice", telegram_user_id: 222 },
+      ],
       integrations: [],
     };
     assert.ok(SettingsSchema.safeParse(data).success);
@@ -153,9 +156,9 @@ describe("SettingsSchema", () => {
   test("accepts settings with disabled_scouts", () => {
     const data = {
       name: "Franklin", mode: "allow_send",
-      user_profile: { name: "Test", slack_user_id: "U123", tone: "pro" },
-      authorized_users: [{ name: "test", slack_user_id: "U123" }],
-      integrations: ["slack"],
+      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
+      authorized_users: [{ name: "mike", telegram_user_id: 111 }],
+      integrations: [],
       disabled_scouts: ["gmail", "calendar"],
     };
     const result = SettingsSchema.safeParse(data);
@@ -163,35 +166,10 @@ describe("SettingsSchema", () => {
     assert.deepEqual(result.data.disabled_scouts, ["gmail", "calendar"]);
   });
 
-  test("accepts settings with owner_user_id", () => {
-    const data = {
-      name: "Franklin", mode: "allow_send",
-      owner_user_id: "U09TE8XTM9A",
-      user_profile: { name: "Test", slack_user_id: "U123", tone: "pro" },
-      authorized_users: [{ name: "test", slack_user_id: "U123" }],
-      integrations: [],
-    };
-    const result = SettingsSchema.safeParse(data);
-    assert.ok(result.success);
-    assert.equal(result.data.owner_user_id, "U09TE8XTM9A");
-  });
-
-  test("accepts settings without owner_user_id (backwards compat)", () => {
-    const data = {
-      name: "Franklin", mode: "allow_send",
-      user_profile: { name: "Test", slack_user_id: "U123", tone: "pro" },
-      authorized_users: [{ name: "test", slack_user_id: "U123" }],
-      integrations: [],
-    };
-    const result = SettingsSchema.safeParse(data);
-    assert.ok(result.success);
-    assert.equal(result.data.owner_user_id, undefined);
-  });
-
   test("rejects settings missing authorized_users", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      user_profile: { name: "Test", slack_user_id: "U123", tone: "pro" },
+      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
       integrations: [],
     };
     assert.ok(!SettingsSchema.safeParse(data).success);
@@ -200,7 +178,27 @@ describe("SettingsSchema", () => {
   test("rejects settings missing user_profile", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      authorized_users: [{ name: "test", slack_user_id: "U123" }],
+      authorized_users: [{ name: "mike", telegram_user_id: 111 }],
+      integrations: [],
+    };
+    assert.ok(!SettingsSchema.safeParse(data).success);
+  });
+
+  test("rejects user_profile missing telegram_user_id", () => {
+    const data = {
+      name: "Franklin", mode: "drafts_only",
+      user_profile: { name: "Mike", telegram_chat_id: 111, tone: "pro" },
+      authorized_users: [{ name: "mike", telegram_user_id: 111 }],
+      integrations: [],
+    };
+    assert.ok(!SettingsSchema.safeParse(data).success);
+  });
+
+  test("rejects authorized_user missing telegram_user_id", () => {
+    const data = {
+      name: "Franklin", mode: "drafts_only",
+      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
+      authorized_users: [{ name: "mike" }],
       integrations: [],
     };
     assert.ok(!SettingsSchema.safeParse(data).success);
