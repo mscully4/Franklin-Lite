@@ -11,11 +11,10 @@
     "test": "node --import tsx/esm --test src/tests/*.test.ts"
   },
   "dependencies": {
-    "@slack/socket-mode": "^2.0.6",
-    "@slack/web-api": "^7.15.0",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.8.0",
     "express": "^4.21.0",
+    "grammy": "^1.42.0",
     "tslog": "^4.10.2",
     "tsx": "^4.21.0",
     "zod": "^4.3.6"
