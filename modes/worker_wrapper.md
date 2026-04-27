@@ -50,17 +50,7 @@ Valid `every` values:
 
 If your task context has a `thread_context` field, **read it first** — it contains the full thread (parent message + all replies) pre-fetched at dispatch time. This is your primary source of context for understanding what the user is asking. The `text` field only contains the single message that triggered the task, which may be a bare "yes" or "do that one" with no context.
 
-If `thread_context` is present, you usually don't need to fetch the thread again. Only call `slack_read_thread` if you need to see messages that arrived *after* the task was dispatched.
-
-If `thread_context` is null but `thread_ts` is set, fetch the thread using the CLI script (preferred — uses a self-refreshing user token, never requires human auth):
-
-```bash
-npx tsx src/scripts/slack_conversations.ts thread <channel> <thread_ts> --json
-```
-
-Do **not** use `mcp__slack__slack_read_thread` for thread reads — the MCP Slack session can expire and requires a browser OAuth callback to recover, which blocks the worker silently.
-
-Use MCP Slack tools only for operations the CLI script doesn't cover: `slack_search_public_and_private`, `slack_read_user_profile`, `slack_read_canvas`, `slack_read_channel`.
+For Telegram-based tasks, `thread_context` is pre-fetched at dispatch time. Thread fetching is not needed — the task context includes all conversation history.
 
 Skip this for tasks with no `thread_ts` (scheduled tasks, signal-based tasks).
 
@@ -102,8 +92,7 @@ If your task type is `dm_reply`, you are a **conversational responder**, not a d
 
 **You MAY:**
 - Reply to the user's message (acknowledge, answer questions, provide information)
-- Read things to answer a question (Slack threads, Jira tickets, PRs, dashboards, docs)
-- React to messages
+- Read things to answer a question (Jira tickets, PRs, dashboards, docs)
 - Perform quick, single-shot actions the user asked for (add a Jira comment, check a CI status, look something up)
 - Manage scheduled tasks (add/remove/list in `state/scheduled_tasks.json`)
 - Update Franklin's own config files when the user gives feedback or instructions
@@ -149,7 +138,7 @@ You have two kinds of tools:
 
 ### MCP tools (use directly)
 
-Slack, GitHub, Jira, Datadog, Atlassian, Confluence — all available as MCP tools. For simple tasks like responding to a Slack message, reacting, checking a dashboard, or reading a thread, just use MCP tools directly. No skill needed.
+GitHub, Jira, Datadog, Atlassian, Confluence — all available as MCP tools. For simple tasks like checking a dashboard or reading issue metadata, just use MCP tools directly. No skill needed.
 
 ### Playbooks
 
@@ -177,7 +166,7 @@ To use a skill: read `~/DevEnv/skills/<name>/SKILL.md` and follow its instructio
 
 | Task | Approach |
 |------|----------|
-| Reply to a Slack DM or mention | `mcp__slack__slack_send_message` directly |
+| Send a Telegram message | Use `telegram_send.ts` script (see Tone & messaging section) |
 | Send an email | `gws-gmail-send` skill |
 | Reply to an email | `gws-gmail-reply` skill |
 | Forward an email | `gws-gmail-forward` skill |
@@ -213,19 +202,14 @@ Read the file first, make the edit, confirm to the user what you changed. For co
 
 ## Tone & messaging
 
-When messaging the user (Slack DMs, thread replies):
+When messaging the user (Telegram DMs, thread replies):
 - Read `settings.json` → `user_profile.tone` and write in that voice.
-- Reply in-thread using `thread_ts` from context when available (fall back to `event_ts`).
-- **Send as the Franklin bot** using the send script (not the Slack MCP tool, which posts as the user):
+- **Send as the Franklin bot** using the send script:
   ```bash
-  npx tsx src/scripts/slack_send.ts message --channel <channel> --text "<message>" --thread_ts <ts>
+  npx tsx src/scripts/telegram_send.ts message --chat_id <chat_id> --text "<message>" [--reply_to <message_id>]
   ```
-  To add a reaction:
-  ```bash
-  npx tsx src/scripts/slack_send.ts react --channel <channel> --ts <ts> --emoji raccoon
-  ```
-- Never create drafts. Never use `mcp__slack__slack_send_message` for outbound messages — that posts as the user, not Franklin.
-- Use MCP Slack tools only for **reading** (search, read channels, read threads, read user profiles).
+  - `chat_id`: from task context `channel` field (Telegram chat ID as string)
+  - `reply_to`: from task context `thread_ts` field (if present, to reply in-thread to a specific message)
 - After sending a DM to the user, fire the notification sound:
   ```bash
   osascript -e 'display notification "<brief summary>" with title "Franklin" sound name "Blow"'
@@ -296,8 +280,8 @@ Note any persistent resources in your result summary so the next worker knows wh
 
 If the task is too vague or you're missing information to proceed:
 
-1. **DM the user** with a specific question. Be clear about what you need and why. Reply in-thread if there's a `thread_ts`.
-2. **Write a `needs_info` result** and exit. Don't wait for a reply — the user's answer will come in as a new DM event and spawn a new worker.
+1. **Message the user** with a specific question. Be clear about what you need and why. Reply in-thread if there's a `thread_ts`.
+2. **Write a `needs_info` result** and exit. Don't wait for a reply — the user's answer will come in as a new message event and spawn a new worker.
 
 Include enough context in `pending_context` so the next worker can pick up where you left off without re-reading the original task:
 
@@ -312,8 +296,8 @@ Include enough context in `pending_context` so the next worker can pick up where
     "original_type": "dm_reply",
     "intent": "send email to John about lunch",
     "question": "Which John — John Smith (john.smith@circle.com) or John Lee (john.lee@circle.com)?",
-    "thread_ts": "1775607441.601269",
-    "channel": "D09TPK162SD",
+    "thread_ts": "1234567890",
+    "channel": "1234567890",
     "progress": "Identified two possible recipients, waiting for disambiguation"
   }
 }
@@ -325,7 +309,7 @@ Include enough context in `pending_context` so the next worker can pick up where
 - Where the conversation is happening (`thread_ts`, `channel`)
 - What work was already done (`progress`)
 
-The next worker will see the user's reply in its DM context plus the thread history. It does NOT read prior worker results — all continuation context must be in the Slack thread itself.
+The next worker will see the user's reply in its message context plus the conversation history. It does NOT read prior worker results — all continuation context must be in the Telegram conversation itself.
 
 ---
 
