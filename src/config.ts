@@ -29,8 +29,6 @@ export const SCOUT_INTERVALS_MS: Record<string, number> = {
   jira: 10 * 60 * 1000,
   gmail: 15 * 60 * 1000,
   calendar: 10 * 60 * 1000,
-  slack_channels: 10 * 60 * 1000,
-  deploy_poll: 5 * 60 * 1000,
 };
 
 /** Default task timeouts by type. Brain can override with `timeout` on any task. */
