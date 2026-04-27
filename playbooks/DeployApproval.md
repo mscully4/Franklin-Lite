@@ -4,6 +4,21 @@ When a deploy approval is requested in `#deploy-bot` and the owner is tagged, Fr
 
 ---
 
+## Phase 0 — Check for prior review
+
+Before doing any work, read the deploy-bot thread to check if Franklin has already posted a review:
+
+```
+npx tsx src/scripts/slack_conversations.ts thread CTDAN6570 <thread_ts> --json
+```
+
+If a prior Franklin review exists in the thread:
+- Extract its recommendation (`Looks safe`, `Hold`, `Insufficient data`) and the commit SHA it reviewed.
+- Compare the SHA against the current deploy SHA. If it's the **same SHA and same recommendation**, skip all remaining phases — do not re-post, do not DM. Exit silently.
+- If the SHA changed or the recommendation would change based on new data, continue and use `is_refresh: true` in Phase 5 so the post is prefixed "🔄 Updated review".
+
+---
+
 ## Phase 1 — Extract change info
 
 Parse the deploy-bot message to identify what's being deployed, then isolate the owner's changes.
@@ -61,6 +76,14 @@ Look for: error rate baselines, known flaky signals to ignore, env tag conventio
 ---
 
 ## Phase 3 — Datadog staging health
+
+**Before querying:** Run a quick probe to confirm Datadog is accessible:
+
+```
+search_datadog_monitors(query="", max_tokens=100)
+```
+
+If this call fails (auth error, MCP token expired, connection refused), **abort the entire review** — do not post to the thread, do not DM the owner. Exit silently. The deploy-bot thread will show no reply; this is intentional.
 
 Query Datadog for the service's staging environment. All queries should target `env:staging` (or `env:stg` — check vector memory results or service notes for which tag applies).
 
@@ -232,7 +255,7 @@ Static config facts that apply to every deploy for a service. For accumulated le
 
 | Service | Env tag | Notes |
 |---|---|---|
-| `credits-manager` | | |
+| `credits-manager` | `env:stg` | SuspensionManager fires every ~1min. Delinquency API gets regular traffic. 4 hosts typical. Burst-dedup guard (DEV-6361) requires an already-suspended entity to validate — rarely triggerable in stg. |
 | `developer-dashboard-service` | `env:stg` | Version tag in DD uses full git SHA. CDS shadow mode runs in staging — watch for `"CDS shadow mode: detected differences"` warnings. |
 | `entitlement-service` | `env:stg` | SQS workers: EntitlementUpdateWorker (high traffic), AccountStateChangeEntitlementRevokeWorker (infrequent — triggered by account state change SNS) |
 | `platform-notifications` | `env:stg` | DD service name: `notifications`. Flyway migration logs not instrumented in DD. "Delivery worker failed" at info level is normal staging behavior (unreachable webhook endpoints). |

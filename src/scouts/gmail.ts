@@ -15,12 +15,14 @@ import { writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { openDb } from "../db.js";
+import { readJson } from "../config.js";
 import { createLogger } from "../logger.js";
 const log = createLogger("gmail");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
 const RESULT_FILE = join(ROOT, "state", "scout_results", "gmail.json");
+const NOISE_SENDERS_FILE = join(ROOT, "state", "gmail_noise_senders.json");
 
 // Senders / domains that are always automated noise — skip silently
 const AUTOMATED_PATTERNS = [
@@ -28,9 +30,8 @@ const AUTOMATED_PATTERNS = [
   /noreply@github\.com/i,
   /jira@.*atlassian\.net/i,
   /slack\.com/i,
-  /noreply@/i,
-  /no-reply@/i,
-  /donotreply@/i,
+  /no[\-_.]?reply@/i,          // noreply@, no-reply@, no_reply@, no.reply@
+  /do[\-_.]?not[\-_.]?reply@/i, // donotreply@, do-not-reply@, do_not_reply@
   /automated@/i,
   /robot@/i,
   /alerts@/i,
@@ -41,10 +42,21 @@ const AUTOMATED_PATTERNS = [
   /marketing@/i,
   /hello@/i,
   /team@/i,
+  /benefits@/i,
+  /innercircle@/i,
+  /gemini-notes@google\.com/i,
+  /digest@/i,
+  /announcements@/i,
 ];
 
+// Load configurable noise senders (maintained by gmail-noise-review scheduled task)
+const noiseSendersConfig = readJson<{ senders: string[] }>(NOISE_SENDERS_FILE);
+const NOISE_SENDERS: string[] = (noiseSendersConfig?.senders ?? []).map((s) => s.toLowerCase());
+
 function isAutomated(from: string): boolean {
-  return AUTOMATED_PATTERNS.some((p) => p.test(from));
+  if (AUTOMATED_PATTERNS.some((p) => p.test(from))) return true;
+  const lower = from.toLowerCase();
+  return NOISE_SENDERS.some((s) => lower.includes(s));
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────

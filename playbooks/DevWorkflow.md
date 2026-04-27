@@ -78,11 +78,25 @@ Log the full agent response to the quest log.
 
 ### 4. PR Creation
 
+Before creating the PR, verify all commits on the branch are GPG-signed:
+
+```bash
+git log origin/master..HEAD --format="%H %G?" | grep -v " G$"
+```
+
+If any commits are unsigned (output is non-empty), re-sign them before proceeding:
+
+```bash
+git rebase --exec "git commit --amend --no-edit -S" origin/master
+```
+
+Only proceed once all commits show `G` (valid signature).
+
 Before creating the PR, run a local SonarQube scan using the `sonar-scan` skill:
 - If issues are found at BLOCKER or HIGH severity, fix them (use `--fix` flag) and re-scan before proceeding.
 - MEDIUM and below: fix if straightforward, otherwise proceed and let `babysit-pr` handle them via CI.
 
-Invoke the `create-pr` skill to push the branch and open a PR against `crcl-main/<repo-name>`. The PR description must always end with `Created by Franklin :whiskey::raccoon:`.
+Invoke the `create-pr` skill to push the branch and open a PR against `crcl-main/<repo-name>`. The PR description must always end with `Created by Franklin :tumbler_glass: :raccoon:`.
 
 Optionally run `analyze-pr` first to self-review before the PR goes up — catches obvious issues before CI runs.
 

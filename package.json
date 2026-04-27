@@ -7,7 +7,6 @@
     "dev": "npx tsx --watch server.ts",
     "franklin": "npx tsx franklin.ts",
     "franklin:status": "npx tsx franklin.ts status",
-    "slack": "tsx src/slack_conversations.ts",
     "test": "node --import tsx/esm --test src/tests/*.test.ts"
   },
   "dependencies": {

@@ -1,5 +1,9 @@
 # Jira Workflow — DEV Board
 
+## Tooling
+
+Prefer the Jira CLI (`jira`) over the Atlassian MCP for all Jira operations. The CLI maintains auth longer than the MCP session. Fall back to the MCP only if the CLI is unavailable or a specific operation isn't supported by it.
+
 ## Lanes (in order)
 
 Backlog → In Progress → In Review → IN TESTING → Done

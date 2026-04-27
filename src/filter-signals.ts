@@ -162,28 +162,6 @@ if (gmailResult?.status === "ok" || gmailResult?.status === "error") {
   }
 }
 
-// ── Slack channels (ops alerts — still polled via scout) ────────────────────
-
-const channelResult = readJson<{ status: string; entries: ChannelEntry[] }>(
-  join(ROOT, "state", "scout_results", "slack_channels.json")
-);
-
-if (channelResult?.status === "ok" || channelResult?.status === "error") {
-  for (const entry of channelResult.entries ?? []) {
-    const row = db.getSurfaced(entry.id);
-    if (!row || !row.last_surfaced_at) {
-      signals.push({
-        id: entry.id,
-        source: entry.source === "ops_alert" ? "slack_alert" : "slack_deploy",
-        is_new: true,
-        previous_state: {},
-        current_state: { surfaced: true },
-        entry,
-      });
-    }
-  }
-}
-
 // ── Slack inbox (Socket Mode) ─────────────────────────────────────────────
 // Partition pending events:
 //   1. Handler matches → signal (brain processes as quest/task)
