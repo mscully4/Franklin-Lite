@@ -117,12 +117,10 @@ function isScoutDue(name: string, lastRun: LastRun): boolean {
 // ── Startup health checks ─────────────────────────────────────────────────────
 
 const HEALTH_PROBES: Record<string, { cmd: string; label: string }> = {
-  github:         { cmd: "gh auth status",                                          label: "GitHub CLI" },
-  jira:           { cmd: `test -f ${join(ROOT, "secrets", "jira_api_token.txt")}`,  label: "Jira API token" },
-  gmail:          { cmd: "which gws",                                               label: "Gmail (gws CLI)" },
-  calendar:       { cmd: "which gws",                                               label: "Calendar (gws CLI)" },
-  slack_channels: { cmd: `test -f ${join(ROOT, "secrets", "franklin_user_oauth_token.txt")}`, label: "Slack OAuth token" },
-  deploy_poll:    { cmd: `test -f ${join(ROOT, "secrets", "franklin_user_oauth_token.txt")}`, label: "Slack OAuth token (deploys)" },
+  github:   { cmd: "gh auth status",                                          label: "GitHub CLI" },
+  jira:     { cmd: `test -f ${join(ROOT, "secrets", "jira_api_token.txt")}`,  label: "Jira API token" },
+  gmail:    { cmd: "which gws",                                               label: "Gmail (gws CLI)" },
+  calendar: { cmd: "which gws",                                               label: "Calendar (gws CLI)" },
 };
 
 function runStartupChecks(enabledScouts: string[]): void {
@@ -182,11 +180,9 @@ function runFilterSignals(): void {
 }
 
 // ── DM task generation ────────────────────────────────────────────────────────
-// Deterministic: every DM from an authorized user gets a dm_reply task.
-// Channel/group messages only get a task if Franklin is explicitly @-mentioned.
+// Deterministic: every DM from an authorized Telegram user gets a dm_reply task.
+// Auth is enforced at intake in server.ts — only authorized IDs ever reach the file.
 // Does NOT go through the brain — avoids LLM dropping messages.
-
-const FRANKLIN_BOT_USER_ID = "U0AS0UZGW6L";
 
 interface SlackInboxEvent {
   event_ts: string;
@@ -200,65 +196,22 @@ interface SlackInboxEvent {
   received_at: string;
 }
 
-function fetchThreadContext(channel: string, threadTs: string): string | null {
-  try {
-    const raw = execSync(
-      `npx tsx src/slack_conversations.ts thread ${channel} ${threadTs} --json`,
-      { cwd: ROOT, timeout: 15_000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
-    const messages = JSON.parse(raw) as Array<{ user?: string; text?: string; ts?: string }>;
-    // Build a plain-text summary of the thread (parent + replies)
-    return messages
-      .map((m) => `[${m.user ?? "unknown"}] ${(m.text ?? "").slice(0, 500)}`)
-      .join("\n");
-  } catch (e: unknown) {
-    log.error(` Failed to fetch thread ${channel}/${threadTs}: ${(e as Error).message?.slice(0, 200)}`);
-    return null;
-  }
-}
-
 function generateDmTasks(): DelegationTask[] {
   const inboxFile = join(ROOT, "state", "brain_input", "slack_inbox.json");
   const inbox = readJson<SlackInboxEvent[]>(inboxFile) ?? [];
   if (!inbox.length) return [];
 
   const settings = readJsonWithSchema(SETTINGS_FILE, SettingsSchema);
-  const ownerId = settings?.owner_user_id ?? settings?.user_profile.slack_user_id ?? "";
-  const authorizedIds = new Set((settings?.authorized_users ?? []).map((u) => u.slack_user_id));
+  const authorizedIds = new Set(
+    (settings?.authorized_users ?? []).map((u) => String(u.telegram_user_id)),
+  );
   const mode = settings?.mode ?? "drafts_only";
 
-  const authDb = openDb();
   const tasks: DelegationTask[] = [];
 
   for (const event of inbox) {
     if (!event.user_id) continue;
-
-    const result = authDb.isAllowed(event.channel, event.channel_type, event.user_id, ownerId, authorizedIds);
-    if (!result.allowed) continue;
-
-    // Trigger mode filtering
-    const isAppMention = event.type === "app_mention";
-    const isReaction = event.type === "reaction_added";
-    const textMentionsFranklin = (event.text ?? "").includes(`<@${FRANKLIN_BOT_USER_ID}>`);
-
-    if (result.triggerMode === "none") continue;
-    const isWhiskeyReaction = isReaction && event.reaction === "whiskey";
-    if (result.triggerMode === "mention" && !isAppMention && !isWhiskeyReaction && !textMentionsFranklin) continue;
-    // triggerMode === "all" falls through — process everything
-
-    const isDm = event.channel_type === "im";
-    const source_tag =
-      isReaction && event.reaction === "whiskey" ? "whiskey" :
-      isReaction ? "reaction" :
-      isDm ? "dm" :
-      isAppMention || textMentionsFranklin ? "mention" : "channel_msg";
-
-    // When the message is a thread reply, fetch the full thread so the worker
-    // sees the original request — not just the bare reply text.
-    let threadContext: string | null = null;
-    if (event.thread_ts && event.thread_ts !== event.event_ts) {
-      threadContext = fetchThreadContext(event.channel, event.thread_ts);
-    }
+    if (!authorizedIds.has(event.user_id)) continue;
 
     tasks.push({
       id: `dm-${event.event_ts}`,
@@ -271,36 +224,25 @@ function generateDmTasks(): DelegationTask[] {
         user_id: event.user_id,
         text: event.text ?? null,
         type: event.type,
-        reaction: event.reaction ?? null,
+        reaction: null,
         thread_ts: event.thread_ts ?? null,
-        thread_context: threadContext,
-        source_tag,
+        thread_context: null,
+        source_tag: "dm",
         quest_id: null,
         mode,
-        max_task_type: result.maxTaskType,
+        max_task_type: "quest",
       },
       mark_surfaced: null,
     });
   }
 
-  // Annotate brain_input with max_task_type so the brain knows which events can spawn quests.
-  // Events that fail trigger-mode filtering get null — the brain must not act on them.
   const annotatedInbox = inbox.map((event) => {
-    if (!event.user_id) return { ...event, max_task_type: null };
-    const r = authDb.isAllowed(event.channel, event.channel_type, event.user_id, ownerId, authorizedIds);
-    if (!r.allowed) return { ...event, max_task_type: null };
-
-    // Apply the same trigger-mode filter used for dm_reply generation
-    const isMention = event.type === "app_mention" || (event.text ?? "").includes(`<@${FRANKLIN_BOT_USER_ID}>`);
-    const isWhiskey = event.type === "reaction_added" && event.reaction === "whiskey";
-    if (r.triggerMode === "none") return { ...event, max_task_type: null };
-    if (r.triggerMode === "mention" && !isMention && !isWhiskey && event.channel_type !== "im") return { ...event, max_task_type: null };
-
-    return { ...event, max_task_type: r.maxTaskType };
+    if (!event.user_id || !authorizedIds.has(event.user_id)) {
+      return { ...event, max_task_type: null };
+    }
+    return { ...event, max_task_type: "quest" };
   });
   writeJson(inboxFile, annotatedInbox);
-
-  authDb.close();
 
   if (tasks.length) {
     log.info(` Generated ${tasks.length} dm_reply task(s) from inbox`);
@@ -646,6 +588,18 @@ function runCycle(startedAt: string): void {
     dispatchTasks(merged);
   } else {
     log.debug("No tasks this cycle");
+  }
+
+  // Process mark_surfaced_only — advance signal state without dispatching tasks
+  const markOnly = brainDelegation?.mark_surfaced_only ?? [];
+  if (markOnly.length) {
+    const msDb = openDb();
+    for (const entry of markOnly) {
+      log.info(` markSurfacedOnly: ${entry.id}`);
+      msDb.markSurfaced(entry.id, entry.state);
+    }
+    msDb.close();
+    log.info(` Marked ${markOnly.length} signal(s) as surfaced (no task dispatched)`);
   }
 
   // Daily housekeeping — prune old data (once per day)
