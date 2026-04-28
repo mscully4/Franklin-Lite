@@ -8,18 +8,18 @@
  */
 
 import { Bot } from "grammy";
-import { readFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { createLogger } from "../logger.js";
 const log = createLogger("telegram");
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..", "..");
-const TOKEN_FILE = join(ROOT, "secrets", "telegram_bot_token.txt");
+const SM_SECRET_ID = "franklin/telegram-bot-token";
+const sm = new SecretsManagerClient({ region: "us-east-2" });
 
-const token = readFileSync(TOKEN_FILE, "utf8").trim();
-const bot = new Bot(token);
+async function getTelegramToken(): Promise<string> {
+  const response = await sm.send(new GetSecretValueCommand({ SecretId: SM_SECRET_ID }));
+  if (!response.SecretString) throw new Error("Secret has no string value");
+  return response.SecretString;
+}
 
 function parseArgs(args: string[]): Record<string, string> {
   const result: Record<string, string> = {};
@@ -41,6 +41,8 @@ async function main() {
       log.error("Usage: telegram_send.ts message --chat_id <id> --text <text> [--reply_to <message_id>]");
       process.exit(1);
     }
+    const token = await getTelegramToken();
+    const bot = new Bot(token);
     const chatId = parseInt(args.chat_id, 10);
     const replyTo = args.reply_to ? parseInt(args.reply_to, 10) : undefined;
     const result = await bot.api.sendMessage(chatId, args.text, {

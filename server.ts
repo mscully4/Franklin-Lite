@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, writeFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Bot } from "grammy";
+import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { openDb } from "./src/db.js";
 import { SCOUT_INTERVALS_MS, readJson } from "./src/config.js";
 import { createLogger } from "./src/logger.js";
@@ -338,8 +339,8 @@ app.listen(PORT, "127.0.0.1", () => {
 
 // ── Telegram Bot (long polling) ───────────────────────────────────────────────
 
-const TELEGRAM_TOKEN_FILE = join(__dirname, "secrets", "telegram_bot_token.txt");
 const TELEGRAM_HEARTBEAT_FILE = join(STATE, "telegram_bot.json");
+const sm = new SecretsManagerClient({ region: "us-east-2" });
 
 function writeTelegramHeartbeat(status: string): void {
   writeFileSync(
@@ -348,8 +349,17 @@ function writeTelegramHeartbeat(status: string): void {
   );
 }
 
-if (existsSync(TELEGRAM_TOKEN_FILE)) {
-  const telegramToken = readFileSync(TELEGRAM_TOKEN_FILE, "utf8").trim();
+(async () => {
+  let telegramToken: string;
+  try {
+    const response = await sm.send(new GetSecretValueCommand({ SecretId: "franklin/telegram-bot-token" }));
+    if (!response.SecretString) throw new Error("Secret has no string value");
+    telegramToken = response.SecretString;
+  } catch (err) {
+    log.error(`[telegram] failed to fetch token from Secrets Manager: ${(err as Error).message}`);
+    writeTelegramHeartbeat("error");
+    return;
+  }
 
   const settingsForAuth = readJson<{
     authorized_users?: Array<{ telegram_user_id?: number }>;
@@ -393,6 +403,4 @@ if (existsSync(TELEGRAM_TOKEN_FILE)) {
       writeTelegramHeartbeat("connected");
     },
   });
-} else {
-  log.warn("Telegram bot token not found — Telegram bot disabled.");
-}
+})();

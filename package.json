@@ -10,6 +10,7 @@
     "test": "node --import tsx/esm --test src/tests/*.test.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1038.0",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.8.0",
     "express": "^4.21.0",
