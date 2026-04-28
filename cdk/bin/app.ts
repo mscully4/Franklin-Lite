@@ -1,6 +1,7 @@
 #!/usr/bin/env npx tsx
 import { App } from "aws-cdk-lib";
 import { SecretsStack } from "../lib/secrets-stack.js";
+import process from "process";
 
 const app = new App();
 
