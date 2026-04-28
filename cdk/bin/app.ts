@@ -1,8 +1,8 @@
 #!/usr/bin/env npx tsx
-import * as cdk from "aws-cdk-lib";
+import { App } from "aws-cdk-lib";
 import { SecretsStack } from "../lib/secrets-stack.js";
 
-const app = new cdk.App();
+const app = new App();
 
 new SecretsStack(app, "FranklinSecrets", {
   env: {
