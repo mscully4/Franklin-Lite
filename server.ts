@@ -225,7 +225,7 @@ app.get("/api/metrics", (_req, res) => {
 app.get("/", (_req, res) => res.sendFile(join(__dirname, "index.html")));
 app.get("/avatar.png", (_req, res) => res.sendFile(join(__dirname, "Franklin-Avatar.png")));
 
-app.listen(PORT, "127.0.0.1", () => {
+app.listen(PORT, "0.0.0.0", () => {
   log.info(`Franklin dashboard → http://localhost:${PORT}`);
 });
 

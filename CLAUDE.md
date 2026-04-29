@@ -12,7 +12,16 @@ See `README.md` for setup, directory structure, and settings reference.
 
 ### Run Mode
 
-When the user says **"Run"**, start the supervisor: `npx tsx franklin.ts`. It handles scouts, brain, and worker dispatch on a 30-second cycle.
+Franklin runs as a systemd user service. To start, stop, or restart:
+
+```
+systemctl --user start franklin.service
+systemctl --user stop franklin.service
+systemctl --user restart franklin.service
+systemctl --user status franklin.service
+```
+
+The service unit is at `~/.config/systemd/user/franklin.service`. Do NOT use `npx tsx franklin.ts` directly — use systemctl.
 
 ### Dev Mode
 
