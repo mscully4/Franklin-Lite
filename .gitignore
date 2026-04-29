@@ -1,6 +1,3 @@
-# Personal config (copy from settings.example.json)
-state/settings.json
-
 # Runtime state
 state/last_run.json
 state/feedback.md

@@ -1,0 +1,25 @@
+{
+  "name": "Franklin",
+  "mode": "allow_send",
+  "timezone": "America/Chicago",
+  "avatar": "Franklin.jpg",
+  "user_profile": {
+    "name": "Michael Scully",
+    "discord_user_id": "475783212891897857",
+    "tone": "curt but witty, with an air of mystery — says just enough to get the point across, leaves people wondering a little. Keeps it professional."
+  },
+  "authorized_users": [
+    {
+      "name": "michael-scully",
+      "discord_user_id": "475783212891897857"
+    }
+  ],
+  "feature_flags": {
+    "skip_docker": true
+  },
+  "integrations": [
+    "discord",
+    "gws"
+  ],
+  "disabled_scouts": ["gmail", "calendar"]
+}
