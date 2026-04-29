@@ -7,8 +7,8 @@
  * Usage:
  *   npx tsx franklin.ts                    Start the supervisor loop
  *   npx tsx franklin.ts status             Print current status and exit
- *   npx tsx franklin.ts --only=github      Run only the github scout
- *   npx tsx franklin.ts --skip=gmail,jira  Skip gmail and jira scouts
+ *   npx tsx franklin.ts --only=gmail        Run only the gmail scout
+ *   npx tsx franklin.ts --skip=calendar    Skip specific scouts
  */
 
 import { spawn, spawnSync, execSync } from "child_process";
@@ -117,8 +117,6 @@ function isScoutDue(name: string, lastRun: LastRun): boolean {
 // ── Startup health checks ─────────────────────────────────────────────────────
 
 const HEALTH_PROBES: Record<string, { cmd: string; label: string }> = {
-  github:   { cmd: "gh auth status",                                          label: "GitHub CLI" },
-  jira:     { cmd: `test -f ${join(ROOT, "secrets", "jira_api_token.txt")}`,  label: "Jira API token" },
   gmail:    { cmd: "which gws",                                               label: "Gmail (gws CLI)" },
   calendar: { cmd: "which gws",                                               label: "Calendar (gws CLI)" },
 };
@@ -203,7 +201,7 @@ function generateDmTasks(): DelegationTask[] {
 
   const settings = readJsonWithSchema(SETTINGS_FILE, SettingsSchema);
   const authorizedIds = new Set(
-    (settings?.authorized_users ?? []).map((u) => String(u.telegram_user_id)),
+    (settings?.authorized_users ?? []).map((u) => u.discord_user_id),
   );
   const mode = settings?.mode ?? "drafts_only";
 
@@ -290,6 +288,7 @@ function generateScheduledTasks(): DelegationTask[] {
   const schedDb = openDb();
 
   for (const job of scheduled) {
+    if (job.disabled) continue;
     // Skip if this scheduled task is already running (background task not yet reaped)
     if (schedDb.hasRunningTaskWithScheduledId(job.id)) continue;
     const parsed = parseInterval(job.every);
@@ -559,13 +558,7 @@ function runCycle(startedAt: string): void {
   // Write inflight signals snapshot — informs brain of in-progress work
   writeInflightSignals();
 
-  // Write pending deploys needing review to brain input
-  const deployDb = openDb();
-  const pendingDeploys = deployDb.getPendingDeploysNeedingReview();
-  deployDb.close();
-  writeJson(join(ROOT, "state", "brain_input", "pending_deploys.json"), pendingDeploys);
-
-  // Brain tick — handles GitHub/Jira/Gmail signals
+  // Brain tick — handles Gmail signals
   runBrain();
 
   // Merge: dm tasks + scheduled tasks + brain's tasks
@@ -670,8 +663,8 @@ function printStatus(): void {
 const args = process.argv.slice(2);
 const command = args[0];
 
-// --only=github,jira  → run only these scouts
-// --skip=gmail,calendar → skip these scouts
+// --only=gmail,calendar  → run only these scouts
+// --skip=gmail           → skip these scouts
 const cliOnlyScouts = args.find((a) => a.startsWith("--only="))?.split("=")[1]?.split(",") ?? null;
 const cliSkipScouts = new Set(args.find((a) => a.startsWith("--skip="))?.split("=")[1]?.split(",") ?? []);
 

@@ -10,47 +10,7 @@ You need these installed before starting:
 
 - **Node.js** v20+ (`node --version`)
 - **Claude Code** CLI (`claude --version`) — [install guide](https://claude.ai/claude-code)
-- **GitHub CLI** (`gh --version`) — authenticated with `gh auth login`
-- **Jira CLI** (`jira --help`) — optional, only if using Jira integration
 - **gws CLI** (`gws --help`) — optional, only if using Google Workspace integration
-
-### MCP servers
-
-Franklin uses MCP servers for Slack, GitHub, Jira, Atlassian, and Datadog. Configure the ones you need in Claude Code:
-
-```bash
-claude mcp add slack
-claude mcp add atlassian    # for Jira/Confluence
-claude mcp add datadog      # optional
-```
-
-or add the following to your JSON config file
-
-```json
-"mcp-atlassian": {
-  "command": "npx",
-  "args": [
-    "mcp-remote",
-    "https://mcp.atlassian.com/v1/sse"
-  ]
-},
-"glean_default": {
-  "type": "http",
-  "url": "https://circle-be.glean.com/mcp/default"
-},
-"datadog": {
-  "type": "http",
-  "url": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
-},
-"slack": {
-  "type": "http",
-  "url": "https://mcp.slack.com/mcp",
-  "oauth": {
-    "clientId": "1601185624273.8899143856786",
-    "callbackPort": 3118
-  }
-}
-```
 
 ---
 
@@ -82,7 +42,7 @@ Edit `state/settings.json`:
   "authorized_users": [
     { "name": "your-slack-username", "slack_user_id": "UXXXXXXXXXX" }
   ],
-  "integrations": ["slack", "jira", "github", "gws"]
+  "integrations": ["telegram", "gws"]
 }
 ```
 
@@ -98,88 +58,31 @@ Edit `state/settings.json`:
 |-------|-------------|
 | `mode` | `"allow_send"` sends messages directly. `"drafts_only"` drafts proactive messages for your review (direct replies always send). |
 | `user_profile.name` | Your name |
-| `user_profile.slack_user_id` | Your Slack member ID |
+| `user_profile.telegram_user_id` | Your Telegram user ID |
 | `user_profile.tone` | How Franklin writes — be specific. Example: `"curt but witty, keeps it professional"` |
 | `authorized_users` | Who can create quests via DM. Franklin ignores messages from everyone else. |
 | `integrations` | Which platforms to monitor. Remove any you don't use. |
 
 ---
 
-## 4. Create a Slack app
+## 4. Create a Telegram bot
 
-Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app.
+1. Message [@BotFather](https://t.me/BotFather) on Telegram
+2. Send `/newbot` and follow the prompts
+3. Copy the bot token
 
-### Bot token scopes
+Franklin stores the token in AWS Secrets Manager. Deploy the CDK stack first (see CDK section), then add the token:
 
-Under **OAuth & Permissions**, add these bot token scopes:
-
-- `app_mentions:read`
-- `channels:history`
-- `chat:write`
-- `groups:history`
-- `im:history`
-- `im:write`
-- `reactions:read`
-- `reactions:write`
-
-### User token scopes
-
-Under **OAuth & Permissions**, add this user token scope:
-
-- `search:read`
-
-### Event subscriptions
-
-Under **Event Subscriptions**, enable events and subscribe to these bot events:
-
-- `message.im`
-- `message.channels`
-- `message.groups`
-- `app_mention`
-- `reaction_added`
-
-### Socket Mode
-
-Under **Socket Mode**, enable it. This is how Franklin receives events in real-time without a public URL.
-
-### App-level token
-
-Under **Basic Information** → **App-Level Tokens**, generate a token with the `connections:write` scope.
-
-### Install the app
-
-Install to your workspace. Copy the three tokens.
+```bash
+aws secretsmanager create-secret --name franklin/telegram-bot-token \
+  --secret-string "your-bot-token"
+```
 
 ---
 
 ## 5. Add secrets
 
-Create a `secrets/` directory and add your tokens:
-
-```bash
-mkdir -p secrets
-
-# Bot OAuth token (xoxb-...)
-echo "xoxb-your-bot-token" > secrets/franklin_bot_oauth_token.txt
-
-# User OAuth token (xoxp-...)
-echo "xoxp-your-user-token" > secrets/franklin_user_oauth_token.txt
-
-# App-level token for Socket Mode (xapp-...)
-echo "xapp-your-app-token" > secrets/franklin_socket_token.txt
-```
-
-### Optional tokens
-
-These are only needed if you use the corresponding integrations:
-
-```bash
-# Jira API token (Settings → API tokens at id.atlassian.com)
-echo "your-jira-token" > secrets/jira_api_token.txt
-
-# SonarQube token (optional, for sonar-scan skill)
-echo "your-sonar-token" > secrets/sonarqube.txt
-```
+The Telegram bot token is stored in AWS Secrets Manager (see step 4). No local secrets file is needed for Telegram.
 
 **Important:** The `secrets/` directory is gitignored. Never commit tokens.
 
@@ -240,7 +143,7 @@ This starts:
 npx tsx franklin.ts                        # Start everything
 npx tsx franklin.ts status                 # Print status and exit
 npx tsx franklin.ts --skip=gmail,calendar  # Skip specific scouts
-npx tsx franklin.ts --only=github          # Run only specific scouts
+npx tsx franklin.ts --only=gmail           # Run only specific scouts
 ```
 
 ### Check it's working
@@ -286,17 +189,11 @@ npx tsx franklin.ts status    # Check if it's actually running
 rm state/franklin.lock        # Remove stale lock if the process is dead
 ```
 
-### Socket not connecting
+### Telegram bot not responding
 
-- Check `secrets/franklin_socket_token.txt` exists and contains a valid `xapp-` token
-- Check **Socket Mode** is enabled in your Slack app config
-- Check `state/slack_socket.json` for the current status
-
-### No reactions on messages
-
-- Verify `secrets/franklin_bot_oauth_token.txt` has a valid `xoxb-` token
-- Verify the bot has `reactions:write` scope
-- Verify your Slack user ID in `settings.json` matches `authorized_users`
+- Check `state/telegram_bot.json` for current status
+- Verify the bot token is in AWS Secrets Manager under `franklin/telegram-bot-token`
+- Verify your Telegram user ID in `settings.json` matches `authorized_users`
 
 ### Port 7070 already in use
 
@@ -307,8 +204,6 @@ lsof -ti :7070 | xargs kill   # Kill whatever's holding the port
 ### Scouts failing
 
 Check `state/scout_results/<scout>.json` for error details. Common issues:
-- **github**: `gh auth login` not run
-- **jira**: missing `secrets/jira_api_token.txt` or jira CLI not installed
 - **gmail/calendar**: `gws` CLI not installed or not authenticated (`gws setup`)
 
 ---
@@ -317,11 +212,11 @@ Check `state/scout_results/<scout>.json` for error details. Common issues:
 
 ```
 franklin.ts (supervisor)
-  ├── Spawns server.ts (dashboard + socket listener)
-  ├── Runs scouts on intervals (github, jira, gmail, calendar)
+  ├── Spawns server.ts (dashboard + Telegram bot)
+  ├── Runs scouts on intervals (gmail, calendar)
   ├── Runs filter-signals (dedup, state comparison)
   ├── Runs brain (reads signals, writes delegation.json)
-  ├── Generates DM tasks (deterministic, from socket inbox)
+  ├── Generates DM tasks (deterministic, from Telegram inbox)
   ├── Generates scheduled tasks (from scheduled_tasks.json)
   ├── Dispatches workers (autonomous Claude agents)
   │   └── Workers use MCP tools + skills library + playbooks
@@ -329,7 +224,7 @@ franklin.ts (supervisor)
 
 server.ts
   ├── Dashboard at :7070
-  ├── Slack Socket Mode listener
+  ├── Telegram bot (long polling)
   └── SQLite DB for state (surfaced signals, quests, dispatch log)
 ```
 
@@ -338,14 +233,12 @@ server.ts
 | File | Purpose |
 |------|---------|
 | `franklin.ts` | Supervisor — the main loop |
-| `server.ts` | Dashboard + socket listener |
+| `server.ts` | Dashboard + Telegram bot |
 | `modes/brain.md` | Brain prompt — signal reasoning |
 | `modes/worker_wrapper.md` | Worker prompt — autonomous task execution |
-| `playbooks/DevWorkflow.md` | End-to-end dev workflow |
-| `scripts/db.ts` | SQLite schema and helpers |
-| `scripts/scouts/*.ts` | Scout scripts (github, jira, gmail, calendar) |
-| `scripts/slack_send.ts` | Send messages/reactions as the Franklin bot |
-| `scripts/filter-signals.ts` | Dedup and state-diff before brain |
+| `src/db.ts` | SQLite schema and helpers |
+| `src/scouts/*.ts` | Scout scripts (gmail, calendar) |
+| `src/filter-signals.ts` | Dedup and state-diff before brain |
 | `state/settings.json` | Your personal config |
 | `state/scheduled_tasks.json` | Recurring task definitions |
 | `CLAUDE.md` | Franklin's behavioral instructions |

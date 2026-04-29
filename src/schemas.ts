@@ -55,6 +55,7 @@ export const ScheduledTaskSchema = z.object({
   last_run: z.string().nullable().optional(),
   fail_count: z.number().optional(),
   last_fail: z.string().nullable().optional(),
+  disabled: z.boolean().optional(),
 });
 
 export type ScheduledTask = z.infer<typeof ScheduledTaskSchema>;
@@ -69,14 +70,13 @@ export const SettingsSchema = z.object({
   avatar: z.string().optional(),
   user_profile: z.object({
     name: z.string(),
-    telegram_user_id: z.number().int(),
-    telegram_chat_id: z.number().int(),
+    discord_user_id: z.string(),
     tone: z.string(),
   }),
   authorized_users: z.array(
     z.object({
       name: z.string(),
-      telegram_user_id: z.number().int(),
+      discord_user_id: z.string(),
     }),
   ),
   integrations: z.array(z.string()),

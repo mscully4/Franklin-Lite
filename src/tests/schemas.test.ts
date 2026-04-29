@@ -130,12 +130,12 @@ describe("ScheduledTaskSchema", () => {
 });
 
 describe("SettingsSchema", () => {
-  test("accepts real settings shape with telegram fields", () => {
+  test("accepts real settings shape with discord fields", () => {
     const data = {
       name: "Franklin", mode: "allow_send", avatar: "Franklin.jpg",
-      user_profile: { name: "Mike", telegram_user_id: 123456789, telegram_chat_id: 123456789, tone: "curt but witty" },
-      authorized_users: [{ name: "mike", telegram_user_id: 123456789 }],
-      integrations: ["telegram", "jira", "github", "gws"],
+      user_profile: { name: "Mike", discord_user_id: "123456789012345678", tone: "curt but witty" },
+      authorized_users: [{ name: "mike", discord_user_id: "123456789012345678" }],
+      integrations: ["discord", "gws"],
     };
     assert.ok(SettingsSchema.safeParse(data).success);
   });
@@ -143,10 +143,10 @@ describe("SettingsSchema", () => {
   test("accepts multiple authorized users", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
+      user_profile: { name: "Mike", discord_user_id: "111111111111111111", tone: "pro" },
       authorized_users: [
-        { name: "mike", telegram_user_id: 111 },
-        { name: "alice", telegram_user_id: 222 },
+        { name: "mike", discord_user_id: "111111111111111111" },
+        { name: "alice", discord_user_id: "222222222222222222" },
       ],
       integrations: [],
     };
@@ -156,8 +156,8 @@ describe("SettingsSchema", () => {
   test("accepts settings with disabled_scouts", () => {
     const data = {
       name: "Franklin", mode: "allow_send",
-      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
-      authorized_users: [{ name: "mike", telegram_user_id: 111 }],
+      user_profile: { name: "Mike", discord_user_id: "111111111111111111", tone: "pro" },
+      authorized_users: [{ name: "mike", discord_user_id: "111111111111111111" }],
       integrations: [],
       disabled_scouts: ["gmail", "calendar"],
     };
@@ -169,7 +169,7 @@ describe("SettingsSchema", () => {
   test("rejects settings missing authorized_users", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
+      user_profile: { name: "Mike", discord_user_id: "111111111111111111", tone: "pro" },
       integrations: [],
     };
     assert.ok(!SettingsSchema.safeParse(data).success);
@@ -178,26 +178,26 @@ describe("SettingsSchema", () => {
   test("rejects settings missing user_profile", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      authorized_users: [{ name: "mike", telegram_user_id: 111 }],
+      authorized_users: [{ name: "mike", discord_user_id: "111111111111111111" }],
       integrations: [],
     };
     assert.ok(!SettingsSchema.safeParse(data).success);
   });
 
-  test("rejects user_profile missing telegram_user_id", () => {
+  test("rejects user_profile missing discord_user_id", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      user_profile: { name: "Mike", telegram_chat_id: 111, tone: "pro" },
-      authorized_users: [{ name: "mike", telegram_user_id: 111 }],
+      user_profile: { name: "Mike", tone: "pro" },
+      authorized_users: [{ name: "mike", discord_user_id: "111111111111111111" }],
       integrations: [],
     };
     assert.ok(!SettingsSchema.safeParse(data).success);
   });
 
-  test("rejects authorized_user missing telegram_user_id", () => {
+  test("rejects authorized_user missing discord_user_id", () => {
     const data = {
       name: "Franklin", mode: "drafts_only",
-      user_profile: { name: "Mike", telegram_user_id: 111, telegram_chat_id: 111, tone: "pro" },
+      user_profile: { name: "Mike", discord_user_id: "111111111111111111", tone: "pro" },
       authorized_users: [{ name: "mike" }],
       integrations: [],
     };

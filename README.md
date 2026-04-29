@@ -2,7 +2,7 @@
 
 ![Franklin](Franklin.jpg)
 
-Franklin is a personal autonomous agent that monitors Slack, GitHub, Jira, Gmail, and your calendar — surfacing what needs attention and acting on it. DM him a task, and he figures out how to get it done.
+Franklin is a personal autonomous agent that monitors Gmail and your calendar — surfacing what needs attention and acting on it. DM him on Telegram, and he figures out how to get it done.
 
 ---
 
@@ -23,8 +23,8 @@ For simple requests (send an email, check a dashboard, answer a question), Frank
 
 ```
 franklin.ts (supervisor, 30-second cycles)
-  ├── server.ts (dashboard + Slack socket listener)
-  ├── Scouts (github, jira, gmail, calendar)
+  ├── server.ts (dashboard + Telegram bot listener)
+  ├── Scouts (gmail, calendar)
   ├── filter-signals (dedup + state comparison)
   ├── Brain (reads signals, decides what to do)
   ├── Workers (autonomous Claude agents)
@@ -37,9 +37,9 @@ franklin.ts (supervisor, 30-second cycles)
 
 **Brain** reads the filtered signals and writes `state/delegation.json` — a list of tasks to execute.
 
-**Workers** are autonomous Claude agents that receive a task and figure out how to do it. They have access to MCP tools (Slack, GitHub, Jira, Datadog, etc.), a global skills library (`~/DevEnv/skills/`), playbooks for complex workflows, and the `pi-db-query` skill for read-only database lookups when a task requires it.
+**Workers** are autonomous Claude agents that receive a task and figure out how to do it. They have access to MCP tools, a global skills library (`~/DevEnv/skills/`), and playbooks for complex workflows.
 
-**Quest agents** handle multi-step work: create a branch, write code, open a PR, babysit CI, and report back. See `playbooks/DevWorkflow.md`.
+**Quest agents** handle multi-step work that spans multiple steps and tool calls.
 
 ---
 
@@ -47,8 +47,6 @@ franklin.ts (supervisor, 30-second cycles)
 
 | Scout | Interval | What it monitors |
 |-------|----------|------------------|
-| `github` | 10 min | Your PRs (CI, reviews), review requests, assignments, notifications |
-| `jira` | 10 min | Assigned tickets, status changes, comments |
 | `gmail` | 15 min | Unread inbox (filters out automated noise) |
 | `calendar` | 10 min | Today + tomorrow events, transcript availability |
 
@@ -58,7 +56,7 @@ franklin.ts (supervisor, 30-second cycles)
 
 Workers are autonomous — given a task, they decide how to execute it. They can:
 
-- Use MCP tools directly (Slack, GitHub, Jira, Datadog)
+- Use MCP tools directly
 - Invoke skills from `~/DevEnv/skills/`
 - Follow playbooks from `playbooks/`
 - Ask you for clarification via Slack DM
@@ -139,10 +137,7 @@ Each quest is tracked in SQLite and as a JSON file in `state/quests/`. Franklin 
 
 - Objective and approach
 - Every action taken (log)
-- Linked Jira ticket and PR URL
 - Outcome when complete
-
-For code changes, Franklin clones into a sandbox, makes changes, opens a PR, and babysits CI/reviews until it's green.
 
 ---
 
@@ -156,34 +151,21 @@ Franklin updates his own prompts and config based on your feedback. Tell him "al
 
 ```
 franklin.ts                    # Supervisor — the main loop
-server.ts                      # Dashboard + Slack socket listener
+server.ts                      # Dashboard + Telegram bot listener
 CLAUDE.md                      # Franklin's behavioral instructions
 modes/
   brain.md                     # Brain prompt — signal reasoning
   worker_wrapper.md            # Worker prompt — autonomous task execution
-  RUN.md                       # Run mode spec
-  DEV.md                       # Dev mode spec
-playbooks/
-  DevWorkflow.md               # End-to-end dev workflow
-scripts/
-  setup-loopback.sh            # One-time macOS loopback alias setup (run with sudo)
 src/
   db.ts                        # SQLite schema and helpers
-  docker_override.ts           # Docker compose override generator for port isolation
   filter-signals.ts            # Dedup and state-diff
-  slack_send.ts                # Send messages/reactions as Franklin bot
-  scripts/
-    docker_claim.ts            # Claim a loopback IP for a worker
-    docker_release.ts          # Release IP and remove compose override
   scouts/
-    github.ts                  # GitHub scout
-    jira.ts                    # Jira scout
     gmail.ts                   # Gmail scout
     calendar.ts                # Calendar scout
 state/
   settings.json                # Personal config (gitignored)
   scheduled_tasks.json         # Recurring task definitions
-  franklin.db                  # SQLite — quests, dispatch log, signals, IP pool
+  franklin.db                  # SQLite — quests, dispatch log, signals
   quests/active/               # In-flight quests
   quests/completed/            # Done
   scout_results/               # Latest scout output
@@ -191,7 +173,6 @@ state/
   worker_results/              # Worker output
 secrets/                       # Tokens (gitignored)
 knowledge/                     # Domain knowledge (symlink, gitignored)
-  repos/<repo>/docker.md       # Per-repo Docker config and flags
 references/                    # Tool guides (symlink)
 ```
 

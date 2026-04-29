@@ -16,6 +16,13 @@ state/meeting_series.json
 state/server.log
 state/slack_socket.json
 state/socket.lock
+state/discord_bot.json
+state/telegram_bot.json
+state/gmail_noise_senders.json
+state/last_transcript_run.json
+state/lifecycle_last_flags.json
+state/user_claimed_prs.json
+state/reviews/*
 state/quests/active/*.json
 state/quests/completed/*.json
 state/quests/archived/*.json
@@ -26,6 +33,10 @@ state/worker_results/*
 state/logs/*
 state/meetings/*
 !state/**/.gitkeep
+
+# Local env and service config
+.envrc
+scripts/start-service.sh
 
 # Local Claude Code config
 .claude/

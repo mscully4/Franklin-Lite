@@ -17,13 +17,11 @@ The world comes to you as pre-filtered input. You read, reason, and delegate.
 Read all of these. Missing files are not errors — treat as empty.
 
 ```
-state/brain_input/signals.json          changed stateful signals (github, jira, gmail)
+state/brain_input/signals.json          changed stateful signals (gmail)
 state/brain_input/slack_inbox.json      unprocessed Slack inbox events
 state/brain_input/inflight_signals.json  signals with active tasks (array of signal_ids)
-state/brain_input/pending_deploys.json  deploys needing review (pending, no evidence yet)
-state/user_claimed_prs.json             PRs the user is handling locally (skip entirely)
 state/settings.json                     user identity, authorized_users
-state/slack_socket.json                 socket mode health
+state/discord_bot.json                  Discord bot health
 state/last_run.json                     timestamps from last cycle
 state/quests/active/quest-*.json        active quest files (not *.log.json)
 ```
@@ -35,21 +33,6 @@ state/quests/active/quest-*.json        active quest files (not *.log.json)
 ### signals.json
 
 An array of signals where the state has changed since the last time the user was notified. The heavy lifting (deduplication, comparison) is already done — every signal here is actionable unless your judgment says otherwise.
-
-```json
-{
-  "id": "github:pr:crcl-main/wallets-api/3077",
-  "source": "github",
-  "is_new": true,
-  "previous_state": {},
-  "current_state": {
-    "ci_failing": ["lint"],
-    "changes_requested": [],
-    "approved": false
-  },
-  "entry": { ...full scout entry... }
-}
-```
 
 `is_new: true` means never surfaced before. `previous_state: {}` means same thing.
 
@@ -70,22 +53,6 @@ An array of raw Slack events, already drained and deduplicated. Every event here
 }
 ```
 
-### pending_deploys.json
-
-An array of deploys from the `#deploy-bot` channel that are pending approval and have not yet been analyzed (no evidence). These come from the deploy poll scout, which tracks deploy messages where the owner is tagged as approver.
-
-```json
-{
-  "id": "deploy:CTDAN6570/1776182661.852439",
-  "service": "wallets-api",
-  "description": "deploy-bot message text (first 500 chars)",
-  "requester": "U12345678",
-  "message_url": "https://circlefin.slack.com/archives/CTDAN6570/p...",
-  "status": "pending",
-  "created_at": "ISO 8601"
-}
-```
-
 ---
 
 ## Step 3 — Slack Inbox
@@ -100,100 +67,7 @@ Each event in `slack_inbox.json` now includes a `max_task_type` field:
 
 ---
 
-## Step 4 — Process GitHub Signals
-
-For each signal with `source: "github"`:
-
-### Step 4a — Deduplication check
-
-**Before doing anything**, check both skip lists:
-- `state/brain_input/inflight_signals.json` — signal_ids with a task already running
-- `state/user_claimed_prs.json` — PRs the user has claimed to handle themselves
-
-If the signal's `id` appears in either list, **skip it entirely** — do not emit any task.
-
-### Step 4b — Evaluate state
-
-The `current_state` includes:
-- `ci_failing` — array of failing check names
-- `changes_requested` — array of reviewers who requested changes
-- `approved` — boolean
-- `mergeable_state` — `"clean"`, `"behind"`, `"dirty"`, `"blocked"`, or `"unknown"`
-- `review_comments` — count of inline review comments
-
-### Step 4c — Proactive action rules
-
-Franklin proactively manages authored PRs to keep them in a reviewable state. **Act without waiting for the user to ask.** Generate exactly one task per PR based on the highest-priority issue:
-
-**Priority order** (handle the first match):
-
-1. **Branch behind** (`mergeable_state === "behind"`): emit a **script task** to rebase. CI may pass after the rebase, so don't also fix CI in the same cycle.
-   ```json
-   { "type": "pr_monitor", "kind": "script", "command": "gh pr update-branch --repo <repo> <number>", "context": { "signal_id": "...", "repo": "...", "number": ..., "reason": "branch behind base" } }
-   ```
-
-2. **Merge conflict** (`mergeable_state === "dirty"`): emit a **quest**. The quest agent needs to clone, resolve the conflict, and push.
-
-3. **CI failing** (`ci_failing` is non-empty): emit a **quest**. The quest agent should use the `babysit-pr` skill to analyze failures and push fixes.
-
-4. **Review feedback** (`changes_requested` is non-empty OR `review_comments` increased vs `previous_state`): emit a **quest**. The quest agent should read all review comments, address them, commit, and push.
-
-5. **Approved and ready** (`approved === true` AND `ci_failing` is empty AND `mergeable_state === "clean"`): emit a **quest** that **DMs the user** that the PR is ready to merge. **Never auto-merge.** Merging requires human approval.
-
-6. **No action needed**: add an entry to `mark_surfaced_only` (not a task) so the signal doesn't re-fire without wasting a dispatch:
-   ```json
-   { "id": "github:pr:crcl-main/repo/123", "state": { ...current_state... } }
-   ```
-
-**Quest objective framing:** Be explicit about what the quest agent should do. Example: `"Get PR #656 (crcl-main/credits-manager) back to a reviewable state. Fix CI failures: [lint, test]. Address 3 new review comments."` Not just "monitor PR."
-
-**Jira ticket transitions:** Quest agents should also update the linked Jira ticket (if `jira_key` is present in `entry.raw`). Include `jira_key` in the task context. See `playbooks/JiraWorkflow.md` for the full workflow, but the key rules are:
-- PR created + CI green → transition ticket to `In Review`
-- PR CI still failing → keep ticket in `In Progress`
-- PR fixed (CI green, comments addressed) → transition to `In Review`
-- PR merged → transition to `IN TESTING`
-- Never transition to `Done` — that requires human verification
-
-One quest per PR. Never emit both a script and quest for the same PR in one cycle.
-
-### Step 4c2 — Review requests (auto-review)
-
-For signals where `entry.type === "review_request"`:
-
-- If `current_state.reviewed_by_me === false` → emit a **quest** task to review the PR. No user approval needed — Franklin is specifically requested as reviewer.
-  ```json
-  {
-    "type": "quest",
-    "context": {
-      "signal_id": "github:pr:crcl-main/repo/123",
-      "objective": "Review PR #123 in crcl-main/repo (authored by jane.doe). Clone, check out the branch, run analyze-pr, post findings.",
-      "approach": ["Clone repo to sandbox", "Check out PR branch", "Run analyze-pr skill", "Post review findings", "DM user with summary"]
-    },
-    "mark_surfaced": { "id": "github:pr:crcl-main/repo/123", "state": { "reviewed_by_me": false } }
-  }
-  ```
-- If `current_state.reviewed_by_me === true` → no action. Add to `mark_surfaced_only` so it doesn't re-fire:
-  ```json
-  { "id": "github:pr:crcl-main/repo/123", "state": { "reviewed_by_me": true } }
-  ```
-
-Each PR is reviewed once. The GitHub scout tracks `reviewed_by_me` via the `reviewed_prs` cursor — once Franklin submits a review, this flips to `true` and the signal won't re-fire.
-
----
-
-### Step 4d — PR merge → ticket transition
-
-Also check signals for `my_activity` entries with `activity_type: "pr_merged"`. When a PR is merged:
-- Extract the Jira key from the PR title (same `[A-Z]+-\d+` pattern)
-- If a Jira key is found, emit a **worker task** to transition the ticket to `IN TESTING` and post a comment noting the merge and that staging verification with evidence is needed:
-  ```json
-  { "type": "jira_update", "context": { "signal_id": "...", "jira_key": "DEV-1234", "objective": "PR merged for DEV-1234. Transition ticket to IN TESTING. Post a comment noting the merge and that staging verification with evidence (logs, screenshots, etc.) is required before moving to Done.", "reason": "pr_merged" }, "mark_surfaced": { "id": "...", "state": { "merged": true } } }
-  ```
-- If no Jira key in the title, skip.
-
----
-
-## Step 5 — Process Gmail Signals
+## Step 4 — Process Gmail Signals
 
 For each signal with `source: "gmail"` (always `is_new: true` — emails surface once):
 
@@ -204,9 +78,9 @@ Apply judgment — only generate a task if the email is worth the user's attenti
 
 **Skip silently:**
 - Marketing, newsletters, promotions
-- Automated notifications (GitHub, Jira, Slack, PagerDuty, etc.)
+- Automated notifications (bots, system mailers, etc.)
 - Meeting invites already visible in calendar
-- Mass-distribution emails (BCC lists, all-hands announcements)
+- Mass-distribution emails (BCC lists, announcements)
 
 For emails that pass the filter, emit an `email_notify` task with context: `subject`, `from`, `snippet`, `date`, `message_id`.
 
@@ -217,81 +91,15 @@ For emails that pass the filter, emit an `email_notify` task with context: `subj
 
 ---
 
-## Step 6 — Process Jira Signals
+## Step 5 — Process Slack Channel Signals
 
-For each signal with `source: "jira"`:
+For signals from registered channel handlers (see `src/channel-signals.ts`): emit a `dm_reply` task with `priority: "high"` and include the signal text as context.
 
-Apply judgment — only generate a `jira_update` task if something worth telling the user changed:
-- Status changed (e.g. Backlog → In Progress, In Progress → In Review)
-- A new comment was added (`current_state.last_comment_updated` differs from `previous_state.last_comment_updated` and is non-null)
-
-**Skip entirely:**
-- Transitions into Done / Won't Do / False Positive
-- Backlog tickets with no comment activity
-- Security scanning noise (CORP-* tickets where the only comment author is "Security DNR Automation")
+`mark_surfaced`: always set — signals from channels surface once.
 
 ---
 
-## Step 6b — Process Slack Channel Signals
-
-### Ops alerts (`source === "slack_alert"`)
-
-These are from `#warn-developer-services`, already filtered to team-owned services. Every signal here is worth the user's attention.
-
-Emit a `dm_reply` task with `priority: "high"`:
-```json
-{
-  "type": "dm_reply",
-  "priority": "high",
-  "context": {
-    "signal_id": "slack:ops_alert:C03GX4SM7RN/...",
-    "source_tag": "ops_alert",
-    "text": "⚠️ Alert in #warn-developer-services affecting <service>: <summary of alert text>",
-    "channel": "D09TPK162SD"
-  },
-  "mark_surfaced": { "id": "slack:ops_alert:...", "state": { "surfaced": true } }
-}
-```
-
-### Deploy approvals (`pending_deploys.json`)
-
-These come from the deploy poll scout via the supervisor. Each entry is a pending deploy in `#deploy-bot` where the owner was tagged as approver and either:
-- No evidence has been gathered yet (first check), or
-- Evidence is older than 2 hours (refresh check — `evidence_at` will be non-null)
-
-**Deduplication:** Before emitting a task, check active quests (`state/quests/active/quest-*.json`). If any active quest's `context.deploy_id` matches the deploy's `id`, skip it — a worker is already on it.
-
-For each entry in `pending_deploys.json` that passes deduplication, emit a **quest** task. If `evidence_at` is non-null, this is a refresh — note that in the objective so the worker knows to update rather than create:
-
-```json
-{
-  "type": "quest",
-  "context": {
-    "deploy_id": "deploy:CTDAN6570/1776182661.852439",
-    "objective": "Deploy approval requested for <service>. Follow playbooks/DeployApproval.md to verify staging health and DM a recommendation with evidence.",
-    "playbook": "DeployApproval.md",
-    "service": "<service>",
-    "deploy_description": "<description from entry>",
-    "message_url": "<message_url from entry>",
-    "is_refresh": false
-  },
-  "mark_surfaced": null
-}
-```
-
-For refreshes (`evidence_at` is non-null):
-```json
-{
-  "objective": "Refresh deploy review for <service> (last checked <evidence_at>). Follow playbooks/DeployApproval.md to re-check staging health and update evidence.",
-  "is_refresh": true
-}
-```
-
-`mark_surfaced` is null — the deploy re-enters this list naturally when evidence becomes stale again.
-
----
-
-## Step 7 — Multi-Step Tasks (Quests)
+## Step 6 — Multi-Step Tasks (Quests)
 
 Some tasks require multiple steps across tool calls, take longer than a single action, or involve iteration (write code → open PR → monitor CI → merge). Emit these as `type: "quest"` — they get persistent state files and a 60-minute timeout.
 
@@ -317,15 +125,15 @@ One quest per user request. Do not split a single user request into multiple que
 
 ---
 
-## Step 8 — Socket Health Check
+## Step 7 — Socket Health Check
 
-Read `state/slack_socket.json`. If `status !== "connected"` OR `updated_at` is more than 5 minutes old:
+Read `state/discord_bot.json`. If `status !== "connected"` OR `updated_at` is more than 5 minutes old:
 
-Check `state/last_run.json` for `socket_alert_sent`. If it equals today's date (YYYY-MM-DD), skip. Otherwise add a `dm_reply` task with `source_tag: "ops_alert"` and `text: "Slack socket is down or stale — check server.ts."`, priority `high`.
+Check `state/last_run.json` for `socket_alert_sent`. If it equals today's date (YYYY-MM-DD), skip. Otherwise add a `dm_reply` task with `source_tag: "ops_alert"` and `text: "Discord bot is down or stale — check server.ts."`, priority `high`.
 
 ---
 
-## Step 9 — Write delegation.json
+## Step 8 — Write delegation.json
 
 Write `state/delegation.json`. Always write the file even if `tasks` is empty.
 
@@ -335,7 +143,7 @@ Write `state/delegation.json`. Always write the file even if `tasks` is empty.
   "tasks": [
     {
       "id": "task-001",
-      "type": "pr_monitor | jira_update | email_notify | dm_reply | quest",
+      "type": "email_notify | dm_reply | quest",
       "priority": "high | normal",
       "kind": "worker | script (optional, default worker)",
       "command": "shell command (required when kind is script)",
@@ -357,91 +165,8 @@ Task IDs are sequential within this run: `task-001`, `task-002`, etc.
 Default timeouts by type (no need to set `timeout` unless overriding):
 - `dm_reply`: 10 min
 - `email_notify`: 5 min
-- `jira_update`: 5 min
-- `pr_monitor`: 60 min
 - `quest`: 60 min
 - `scheduled`: 10 min
-
-### PR monitor quests
-
-PR monitor actions (CI fixes, review comments, merge conflicts, ready-to-merge) are emitted as **quests** (`type: "quest"`) so the agent has up to 60 minutes. Include the full PR context and a reference to `playbooks/PRMonitor.md`:
-
-```json
-{
-  "type": "quest",
-  "context": {
-    "signal_id": "github:pr:crcl-main/wallets-api/3077",
-    "objective": "Get PR #3077 (crcl-main/wallets-api) back to a reviewable state. Fix CI failures: [lint]. Address 2 new review comments.",
-    "approach": ["Read playbooks/PRMonitor.md", "Clone repo to sandbox", "Fix CI failures with babysit-pr", "Address review comments", "Update Jira ticket DEV-6307"],
-    "playbook": "PRMonitor.md",
-    "repo": "crcl-main/wallets-api",
-    "number": 3077,
-    "title": "DEV-6307: migrate auth tests",
-    "url": "https://github.com/crcl-main/wallets-api/pull/3077",
-    "jira_key": "DEV-6307",
-    "ci_failing": ["lint"],
-    "changes_requested": [],
-    "approved": false,
-    "mergeable_state": "clean",
-    "review_comments": 2,
-    "dm_channel": "D09TPK162SD or null"
-  },
-  "mark_surfaced": { "id": "github:pr:crcl-main/wallets-api/3077", "state": { "ci_failing": ["lint"], "changes_requested": [], "approved": false, "mergeable_state": "clean", "review_comments": 2 } }
-}
-```
-
-For ready-to-merge notifications, same quest format:
-```json
-{
-  "type": "quest",
-  "context": {
-    "signal_id": "github:pr:crcl-main/wallets-api/3077",
-    "objective": "DM Michael that PR #3077 is approved, CI green, and ready to merge.",
-    "approach": ["DM user via Slack", "Update Jira ticket if needed"],
-    "playbook": "PRMonitor.md",
-    "repo": "crcl-main/wallets-api",
-    "number": 3077,
-    "title": "DEV-6307: migrate auth tests",
-    "url": "https://github.com/crcl-main/wallets-api/pull/3077",
-    "approved": true,
-    "dm_channel": "D09TPK162SD"
-  },
-  "mark_surfaced": { "id": "github:pr:crcl-main/wallets-api/3077", "state": { "ci_failing": [], "changes_requested": [], "approved": true, "mergeable_state": "clean", "review_comments": 0 } }
-}
-```
-
-### pr_monitor script tasks
-
-Script tasks (branch behind, no-ops) remain as `type: "pr_monitor"` with `kind: "script"`:
-```json
-{
-  "type": "pr_monitor",
-  "kind": "script",
-  "command": "gh pr update-branch --repo crcl-main/wallets-api 3077",
-  "context": {
-    "signal_id": "github:pr:crcl-main/wallets-api/3077",
-    "repo": "crcl-main/wallets-api",
-    "number": 3077,
-    "reason": "branch behind base"
-  }
-}
-```
-
-`dm_channel`: use `settings.json` `user_profile.slack_dm_channel` if set, otherwise fall back to `authorized_users[0].slack_user_id`.
-
-`mark_surfaced` — always set on every PR monitor task (quests and scripts, including no-ops):
-```json
-{
-  "id": "github:pr:crcl-main/wallets-api/3077",
-  "state": {
-    "ci_failing": ["lint"],
-    "changes_requested": [],
-    "approved": false,
-    "mergeable_state": "clean",
-    "review_comments": 0
-  }
-}
-```
 
 ---
 

@@ -2,7 +2,7 @@ import express from "express";
 import { readFileSync, readdirSync, writeFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { Bot } from "grammy";
+import { Client, GatewayIntentBits } from "discord.js";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { openDb } from "./src/db.js";
 import { SCOUT_INTERVALS_MS, readJson } from "./src/config.js";
@@ -12,13 +12,9 @@ const log = createLogger("server");
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE = join(__dirname, "state");
 const PORT = 7070;
-const GITHUB_ORG = "crcl-main";
-
 const app = express();
 app.use(express.json());
 const db = openDb();
-
-const CLAIMED_PRS_FILE = join(STATE, "user_claimed_prs.json");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -124,8 +120,8 @@ app.get("/api/state", (_req, res) => {
     .map((e) => ({ title: e.title, start: e.start, end: e.end, location: e.location ?? "", meetingUrl: e.meetingUrl ?? "", notified: e.notified ?? false, transcript_available: e.transcript_available ?? false }))
     .slice(0, 8);
 
-  // Telegram bot status
-  const socketData = readJson<{ status: string; updated_at: string }>(join(STATE, "telegram_bot.json"));
+  // Discord bot status
+  const socketData = readJson<{ status: string; updated_at: string }>(join(STATE, "discord_bot.json"));
   const socketStatus = socketData?.status ?? "unknown";
   const socketStale = isStale(socketData?.updated_at ?? null, 300);
 
@@ -149,84 +145,6 @@ app.get("/api/state", (_req, res) => {
   const scheduledTasks = (readJson<Array<{ id: string; every: string; kind?: string; display_description?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
     .map((t) => ({ id: t.id, every: t.every, kind: t.kind ?? "worker", description: t.display_description ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
 
-  // Open PRs from GitHub scout
-  interface GhScoutEntry { id: string; type: string; title: string; url: string; repo: string; number: number; updated_at: string; raw: Record<string, unknown> }
-  const githubScout = readJson<{ entries?: GhScoutEntry[] }>(join(STATE, "scout_results", "github.json"));
-  const openPrs = (githubScout?.entries ?? [])
-    .filter((e) => e.type === "pr_authored")
-    .map((e) => {
-      const r = e.raw;
-      const ciFailing = (r.ci_failing as string[]) ?? [];
-      const mergeableState = (r.mergeable_state as string) ?? "unknown";
-      const reviewComments = (r.review_comments as number) ?? 0;
-      const approved = (r.approved as boolean) ?? false;
-      const changesRequested = (r.changes_requested as string[]) ?? [];
-      // Determine status label
-      let status = "awaiting review";
-      if (ciFailing.length > 0) status = "ci_failing";
-      else if (mergeableState === "dirty") status = "conflict";
-      else if (mergeableState === "behind") status = "behind";
-      else if (changesRequested.length > 0) status = "changes_requested";
-      else if (approved && mergeableState === "clean") status = "ready";
-      else if (approved) status = "ok";
-      else if (mergeableState === "clean" || mergeableState === "blocked" || mergeableState === "unknown") status = "awaiting review";
-      return {
-        repo: e.repo.replace(`${GITHUB_ORG}/`, ""),
-        number: e.number,
-        title: e.title,
-        url: e.url,
-        status,
-        ciFailing,
-        reviewComments,
-        approved,
-        mergeableState,
-        updatedAgo: timeAgo(e.updated_at),
-      };
-    });
-
-  // Review requests
-  const reviewRequests = (githubScout?.entries ?? [])
-    .filter((e) => e.type === "review_request")
-    .map((e) => ({
-      repo: e.repo.replace(`${GITHUB_ORG}/`, ""),
-      number: e.number,
-      title: e.title,
-      url: e.url,
-      author: (e.raw.state as string) ? e.author : e.author,
-      reviewedByMe: (e.raw.reviewed_by_me as boolean) ?? false,
-      updatedAgo: timeAgo(e.updated_at),
-    }));
-
-  // Inflight signals (PRs and other active work)
-  const inflightSignals = readJson<string[]>(join(STATE, "brain_input", "inflight_signals.json")) ?? [];
-  const inflightPrs = inflightSignals.filter((s) => s.startsWith("github:pr:"));
-
-  // Jira tickets from scout — current sprint only
-  interface JiraScoutEntry { id: string; key: string; summary: string; status: string; priority: string; updated: string; labels: string[]; sprint: { name: string; state: string } | null; last_comment: { author: string; body: string; updated: string } | null }
-  const jiraScout = readJson<{ entries?: JiraScoutEntry[] }>(join(STATE, "scout_results", "jira.json"));
-  const DEV_STATUSES = new Set(["Backlog", "In Progress", "In Review", "IN TESTING"]);
-  const jiraTickets = (jiraScout?.entries ?? [])
-    .filter((e) => DEV_STATUSES.has(e.status) && e.sprint?.state === "active")
-    .map((e) => ({
-      key: e.key,
-      summary: e.summary,
-      status: e.status,
-      priority: e.priority,
-      sprint: e.sprint?.name ?? null,
-      updatedAgo: timeAgo(e.updated),
-      lastComment: e.last_comment ? { author: e.last_comment.author, body: e.last_comment.body.slice(0, 100), ago: timeAgo(e.last_comment.updated) } : null,
-    }))
-    .sort((a, b) => {
-      const order = ["In Progress", "In Review", "IN TESTING", "Backlog"];
-      return order.indexOf(a.status) - order.indexOf(b.status);
-    });
-
-  // Deploys
-  const deploys = db.getRecentDeploys(10).map((d) => ({
-    ...d,
-    createdAgo: timeAgo(d.created_at),
-  }));
-
   // Inbox stats from DB
   const pending = db.getPendingSlackEvents().length;
 
@@ -244,37 +162,11 @@ app.get("/api/state", (_req, res) => {
     completedQuests,
     meetings,
     scheduledTasks,
-    openPrs,
-    reviewRequests,
-    inflightPrs,
-    claimedPrs: readJson<string[]>(CLAIMED_PRS_FILE) ?? [],
-    jiraTickets,
-    deploys,
     channelPolicies: db.listChannelPolicies(),
     channelUserRules: db.listUserRules(),
     slackInboxPending: pending,
     serverTime: new Date().toISOString(),
   });
-});
-
-// ── Claimed PRs API ──────────────────────────────────────────────────────────
-
-app.post("/api/claim-pr", (req, res) => {
-  const { signalId } = req.body as { signalId?: string };
-  if (!signalId) return res.status(400).json({ error: "signalId required" });
-  const claimed = new Set(readJson<string[]>(CLAIMED_PRS_FILE) ?? []);
-  claimed.add(signalId);
-  writeFileSync(CLAIMED_PRS_FILE, JSON.stringify([...claimed], null, 2));
-  res.json({ ok: true });
-});
-
-app.delete("/api/claim-pr", (req, res) => {
-  const { signalId } = req.body as { signalId?: string };
-  if (!signalId) return res.status(400).json({ error: "signalId required" });
-  const claimed = new Set(readJson<string[]>(CLAIMED_PRS_FILE) ?? []);
-  claimed.delete(signalId);
-  writeFileSync(CLAIMED_PRS_FILE, JSON.stringify([...claimed], null, 2));
-  res.json({ ok: true });
 });
 
 // ── Metrics API ──────────────────────────────────────────────────────────────
@@ -337,70 +229,103 @@ app.listen(PORT, "127.0.0.1", () => {
   log.info(`Franklin dashboard → http://localhost:${PORT}`);
 });
 
-// ── Telegram Bot (long polling) ───────────────────────────────────────────────
+// ── Discord Bot ───────────────────────────────────────────────────────────────
 
-const TELEGRAM_HEARTBEAT_FILE = join(STATE, "telegram_bot.json");
+const DISCORD_HEARTBEAT_FILE = join(STATE, "discord_bot.json");
 const sm = new SecretsManagerClient({ region: "us-east-2" });
 
-function writeTelegramHeartbeat(status: string): void {
+function writeDiscordHeartbeat(status: string): void {
   writeFileSync(
-    TELEGRAM_HEARTBEAT_FILE,
+    DISCORD_HEARTBEAT_FILE,
     JSON.stringify({ status, updated_at: new Date().toISOString() }) + "\n",
   );
 }
 
 (async () => {
-  let telegramToken: string;
+  let discordToken: string;
   try {
-    const response = await sm.send(new GetSecretValueCommand({ SecretId: "franklin/telegram-bot-token" }));
+    const response = await sm.send(new GetSecretValueCommand({ SecretId: "franklin/discord-bot-token" }));
     if (!response.SecretString) throw new Error("Secret has no string value");
-    telegramToken = response.SecretString;
+    discordToken = response.SecretString;
   } catch (err) {
-    log.error(`[telegram] failed to fetch token from Secrets Manager: ${(err as Error).message}`);
-    writeTelegramHeartbeat("error");
+    log.error(`[discord] failed to fetch token from Secrets Manager: ${(err as Error).message}`);
+    writeDiscordHeartbeat("error");
     return;
   }
 
   const settingsForAuth = readJson<{
-    authorized_users?: Array<{ telegram_user_id?: number }>;
+    authorized_users?: Array<{ discord_user_id?: string }>;
   }>(join(STATE, "settings.json"));
-  const authorizedTelegramIds = new Set(
+  const authorizedDiscordIds = new Set(
     (settingsForAuth?.authorized_users ?? [])
-      .map((u) => u.telegram_user_id)
-      .filter((id): id is number => typeof id === "number"),
+      .map((u) => u.discord_user_id)
+      .filter((id): id is string => typeof id === "string"),
   );
 
-  const telegramBot = new Bot(telegramToken);
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+    ],
+  });
 
-  telegramBot.on("message", (ctx) => {
-    const msg = ctx.message;
-    const fromId = msg.from?.id;
-    if (!fromId || !authorizedTelegramIds.has(fromId)) return;
+  client.on("messageCreate", async (msg) => {
+    if (msg.author.bot) return;
+    if (!authorizedDiscordIds.has(msg.author.id)) return;
 
-    writeTelegramHeartbeat("connected");
-    log.info(`[telegram] message from=${fromId} chat=${msg.chat.id} text=${(msg.text ?? "").slice(0, 80)}`);
+    writeDiscordHeartbeat("connected");
+    log.info(`[discord] message from=${msg.author.id} channel=${msg.channelId} text=${msg.content.slice(0, 80)}`);
+
+    let threadId: string;
+
+    if (msg.channel.isThread()) {
+      threadId = msg.channelId;
+    } else {
+      try {
+        const thread = await msg.startThread({
+          name: msg.content.slice(0, 100) || "Conversation",
+        });
+        threadId = thread.id;
+      } catch (err) {
+        log.error(`[discord] failed to create thread: ${(err as Error).message}`);
+        threadId = msg.channelId;
+      }
+    }
 
     db.insertSlackEvent({
-      event_ts: String(msg.date),
-      channel: String(msg.chat.id),
+      event_ts: msg.id,
+      channel: threadId,
       channel_type: "im",
-      user_id: String(fromId),
+      user_id: msg.author.id,
       type: "message",
-      text: msg.text,
-      thread_ts: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
-      raw: msg as unknown as Record<string, unknown>,
+      text: msg.content,
+      thread_ts: threadId,
+      raw: msg.toJSON() as Record<string, unknown>,
     });
+
+    try {
+      await msg.react('🦝');
+    } catch (err) {
+      log.warn(`[discord] failed to react to message: ${(err as Error).message}`);
+    }
   });
 
-  telegramBot.catch((err) => {
-    log.error(`[telegram] error: ${err.message}`);
-    writeTelegramHeartbeat("error");
+  client.on("error", (err) => {
+    log.error(`[discord] error: ${err.message}`);
+    writeDiscordHeartbeat("error");
   });
 
-  telegramBot.start({
-    onStart: () => {
-      log.info("[telegram] bot started (long polling)");
-      writeTelegramHeartbeat("connected");
-    },
+  const heartbeatInterval = setInterval(() => writeDiscordHeartbeat("connected"), 60_000);
+
+  client.once("ready", () => {
+    log.info(`[discord] bot started as ${client.user?.tag}`);
+    writeDiscordHeartbeat("connected");
+  });
+
+  client.login(discordToken).catch((err) => {
+    log.error(`[discord] login failed: ${(err as Error).message}`);
+    writeDiscordHeartbeat("error");
+    clearInterval(heartbeatInterval);
   });
 })();

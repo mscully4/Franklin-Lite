@@ -25,8 +25,6 @@ export type {
 
 /** Scout polling intervals in milliseconds. Single source of truth. */
 export const SCOUT_INTERVALS_MS: Record<string, number> = {
-  github: 10 * 60 * 1000,
-  jira: 10 * 60 * 1000,
   gmail: 15 * 60 * 1000,
   calendar: 10 * 60 * 1000,
 };
@@ -35,8 +33,6 @@ export const SCOUT_INTERVALS_MS: Record<string, number> = {
 export const DEFAULT_TIMEOUT_BY_TYPE: Record<string, number> = {
   dm_reply:        10 * 60_000,  // 10 min
   email_notify:     5 * 60_000,  //  5 min
-  jira_update:      5 * 60_000,  //  5 min
-  pr_monitor:      60 * 60_000,  // 60 min
   quest:           60 * 60_000,  // 60 min
   scheduled:       10 * 60_000,  // 10 min
 };

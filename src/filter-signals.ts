@@ -2,11 +2,6 @@
 /**
  * Filter signals before spawning the brain.
  *
- * For stateful sources (github, jira):
- *   - Extracts a canonical state object from each scout entry
- *   - Compares against the last-stored state in franklin.db
- *   - Only passes through entries where something changed
- *
  * For slack (one-shot events):
  *   - Drains pending events from slack_inbox table
  *   - Marks them processed immediately (at-least-once: if the brain
@@ -26,8 +21,6 @@ import { fileURLToPath } from "url";
 import { openDb } from "./db.js";
 import { createLogger } from "./logger.js";
 const log = createLogger("filter");
-import type { GithubEntry } from "./scouts/github.js";
-import type { JiraEntry } from "./scouts/jira.js";
 import type { GmailEntry } from "./scouts/gmail.js";
 import { CHANNEL_SIGNAL_HANDLERS } from "./channel-signals.js";
 import type { ChannelEntry } from "./channel-signals.js";
@@ -38,26 +31,6 @@ const OUT_DIR = join(ROOT, "state", "brain_input");
 
 mkdirSync(OUT_DIR, { recursive: true });
 
-// ── State extractors ───────────────────────────────────────────────────────────
-// Each returns the canonical object stored in the DB and compared next cycle.
-
-export function githubState(entry: GithubEntry): Record<string, unknown> {
-  return {
-    ci_failing: (entry.raw.ci_failing as string[]) ?? [],
-    changes_requested: (entry.raw.changes_requested as string[]) ?? [],
-    approved: (entry.raw.approved as boolean) ?? false,
-    mergeable_state: (entry.raw.mergeable_state as string) ?? "unknown",
-    review_comments: (entry.raw.review_comments as number) ?? 0,
-  };
-}
-
-export function jiraState(entry: JiraEntry): Record<string, unknown> {
-  return {
-    status: entry.status,
-    last_comment_updated: entry.last_comment?.updated ?? null,
-  };
-}
-
 export function statesEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -66,76 +39,17 @@ export function statesEqual(a: Record<string, unknown>, b: Record<string, unknow
 
 interface Signal {
   id: string;
-  source: "github" | "jira" | "gmail" | "slack_deploy" | "slack_alert";
+  source: "gmail" | "slack_deploy" | "slack_alert";
   is_new: boolean;                        // true = never surfaced before
   previous_state: Record<string, unknown>;
   current_state: Record<string, unknown>;
-  entry: GithubEntry | JiraEntry | GmailEntry | ChannelEntry;  // full entry for brain context
+  entry: GmailEntry | ChannelEntry;  // full entry for brain context
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 const db = openDb();
 const signals: Signal[] = [];
-
-// ── GitHub ────────────────────────────────────────────────────────────────────
-
-const githubResult = readJson<{ status: string; entries: GithubEntry[] }>(
-  join(ROOT, "state", "scout_results", "github.json")
-);
-
-export function githubReviewState(entry: GithubEntry): Record<string, unknown> {
-  return {
-    reviewed_by_me: (entry.raw.reviewed_by_me as boolean) ?? false,
-  };
-}
-
-if (githubResult?.status === "ok" || githubResult?.status === "error") {
-  for (const entry of githubResult.entries ?? []) {
-    if (entry.type === "pr_authored") {
-      const current = githubState(entry);
-      const row = db.getSurfaced(entry.id);
-      const previous = row?.state ?? {};
-      if (!statesEqual(current, previous)) {
-        signals.push({ id: entry.id, source: "github", is_new: !row, previous_state: previous, current_state: current, entry });
-      }
-    } else if (entry.type === "review_request") {
-      const current = githubReviewState(entry);
-      const row = db.getSurfaced(entry.id);
-      const previous = row?.state ?? {};
-      if (!statesEqual(current, previous)) {
-        signals.push({ id: entry.id, source: "github", is_new: !row, previous_state: previous, current_state: current, entry });
-      }
-    } else if (entry.type === "my_activity") {
-      const activityType = (entry.raw as Record<string, unknown>).activity_type as string | undefined;
-      if (activityType === "pr_merged") {
-        // PR merge events surface once — once surfaced, never re-fire (like Gmail)
-        const current = { merged: true };
-        const row = db.getSurfaced(entry.id);
-        if (!row?.last_surfaced_at) {
-          signals.push({ id: entry.id, source: "github", is_new: true, previous_state: {}, current_state: current, entry });
-        }
-      }
-    }
-  }
-}
-
-// ── Jira ──────────────────────────────────────────────────────────────────────
-
-const jiraResult = readJson<{ status: string; entries: JiraEntry[] }>(
-  join(ROOT, "state", "scout_results", "jira.json")
-);
-
-if (jiraResult?.status === "ok" || jiraResult?.status === "error") {
-  for (const entry of jiraResult.entries ?? []) {
-    const current = jiraState(entry);
-    const row = db.getSurfaced(entry.id);
-    const previous = row?.state ?? {};
-    if (!statesEqual(current, previous)) {
-      signals.push({ id: entry.id, source: "jira", is_new: !row, previous_state: previous, current_state: current, entry });
-    }
-  }
-}
 
 // ── Gmail ─────────────────────────────────────────────────────────────────────
 
@@ -168,10 +82,10 @@ if (gmailResult?.status === "ok" || gmailResult?.status === "error") {
 //   2. Known handler channel but no match → drop (noise that doesn't involve owner)
 //   3. No handler for channel → slack_inbox.json (DM task generation)
 
-const settings = readJson<{ user_profile?: { telegram_user_id?: number } }>(
+const settings = readJson<{ user_profile?: { discord_user_id?: string } }>(
   join(ROOT, "state", "settings.json")
 );
-const ownerUserId = String(settings?.user_profile?.telegram_user_id ?? "");
+const ownerUserId = settings?.user_profile?.discord_user_id ?? "";
 
 const pendingEvents = db.getPendingSlackEvents();
 const handlerChannels = new Set(CHANNEL_SIGNAL_HANDLERS.map((h) => h.channel));

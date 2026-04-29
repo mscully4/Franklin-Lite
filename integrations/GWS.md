@@ -17,7 +17,7 @@ gws gmail +triage --format json --max 20 | jq '.messages | map({id, from, subjec
 
 For each email in the result:
 - From a teammate or manager → DM the user with sender, subject, one-line summary. Log as `info_received`.
-- Automated/bot emails (GitHub, Jira, Slack notifications, marketing) → skip silently.
+- Automated/bot emails (system notifications, marketing) → skip silently.
 - Requires a reply → create a quest with the draft reply for user approval.
 
 To read a full email thread: use `gws-gmail` skill with the `id` from above.
@@ -129,20 +129,19 @@ If the list is empty, skip silently — transcription may not have been enabled.
      "conference_record": "conferenceRecords/xyz",
      "transcript_name": "conferenceRecords/xyz/transcripts/abc",
      "duration_minutes": 32,
-     "attendees": ["michael.scully@circle.com", "priya@circle.com"],
-     "action_items_mine": ["Follow up with Xavier on the auth migration PR"],
-     "action_items_others": [{ "owner": "Priya", "task": "Update the runbook by EOD" }],
-     "decisions": ["Shifting release cutoff to Thursday"],
-     "open_questions": ["Do we need a feature flag for the new dashboard route?"],
-     "previous_meeting_references": ["Circling back on the auth migration from last week"],
-     "metrics": ["Error rate on /v2/payments at 0.3% over last 24h"],
-     "key_topics": ["Release timeline", "Auth migration", "Dashboard feature flag"],
-     "deadlines": ["Release cutoff Thursday"]
+     "attendees": ["alice@example.com", "bob@example.com"],
+     "action_items_mine": ["Follow up with Alice on the project proposal"],
+     "action_items_others": [{ "owner": "Bob", "task": "Send the revised draft by EOD" }],
+     "decisions": ["Moving the deadline to Thursday"],
+     "open_questions": ["Do we need a follow-up meeting next week?"],
+     "previous_meeting_references": ["Circling back on the proposal from last week"],
+     "key_topics": ["Project timeline", "Budget", "Next steps"],
+     "deadlines": ["Draft due Thursday"]
    }
    ```
 
 4. Upsert a prose narrative into Chroma (collection: `meetings`). Prose embeds better than raw JSON — compose a natural-language summary from the extracted fields:
-   > "Dev Console Standup on 2026-04-05. Key topics: release timeline, auth migration, dashboard feature flag. Decided to shift release cutoff to Thursday. Michael to follow up with Xavier on the auth migration PR. Open question: do we need a feature flag for the new dashboard route?"
+   > "Weekly Sync on 2026-04-05. Key topics: project timeline, budget, next steps. Decided to move deadline to Thursday. Alice to follow up on the project proposal. Open question: do we need a follow-up meeting next week?"
 
    Metadata: `date`, `title`, `recurring_event_id`, `summary_path` (full path to the JSON file). When a vector search returns this chunk, load `summary_path` for the full structured data.
 
@@ -150,25 +149,25 @@ If the list is empty, skip silently — transcription may not have been enabled.
 
 5. DM user with summary + osascript Hero sound. Include every non-empty field from the extracted summary:
    ```
-   📝 Dev Console Standup — 10:00am (32 min)
+   📝 Weekly Sync — 10:00am (32 min)
 
    Key topics:
-   • Release timeline
-   • Auth migration
-   • Dashboard feature flag
+   • Project timeline
+   • Budget
+   • Next steps
 
    Decisions:
-   • Shifting release cutoff to Thursday
+   • Moving deadline to Thursday
 
    Action items:
-   • You: Follow up with Xavier on the auth migration PR → DEV-1234
-   • Priya: Update the runbook by EOD
+   • You: Follow up with Alice on the project proposal
+   • Bob: Send the revised draft by EOD
 
    Open questions:
-   • Do we need a feature flag for the new dashboard route?
+   • Do we need a follow-up meeting next week?
 
    Deadlines:
-   • Release cutoff Thursday
+   • Draft due Thursday
 
    Metrics:
    • Error rate on /v2/payments at 0.3% over last 24h
@@ -176,12 +175,8 @@ If the list is empty, skip silently — transcription may not have been enabled.
    Omit any section that has no entries. Always include action items and decisions if present — these are never optional.
 
 6. For each item in `action_items_mine`:
-   - **Infer the Jira project** using meeting context (title, key topics, attendees). If a `jira_project` is set on the series entry in `meeting_series.json`, use that directly. Otherwise, query available epics via `mcp__mcp-atlassian__searchJiraIssuesUsingJql` (`issuetype = Epic AND assignee = currentUser() ORDER BY updated DESC`) and match against the action item and meeting context. If it's still ambiguous, DM the user:
-     > What Jira project should I use for action items from **"<title>"**? (e.g. `DEV`, `ARC`) — or reply with an epic key to link directly.
-     Pause ticket creation for that item until the user replies. Once set, store `jira_project` on the series entry for future meetings.
-   - Create a Jira ticket using the `jira-ticket` skill. Set status to `In Progress`.
-   - Create a quest with `source.platform: "gws_meet"`. Store `transcript_name` and the Jira ticket key (`source.ticket_key`) on the quest.
-   - Include the Jira ticket URL in the DM summary alongside each action item.
+   - Create a quest with `source.platform: "gws_meet"`. Store `transcript_name` on the quest.
+   - DM the user asking whether to create a quest for the action item before doing so.
 
 ### Skills
 

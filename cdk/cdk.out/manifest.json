@@ -11,21 +11,21 @@
     },
     "FranklinSecrets": {
       "type": "aws:cloudformation:stack",
-      "environment": "aws://276773460589/us-west-2",
+      "environment": "aws://735029168602/us-east-2",
       "properties": {
         "templateFile": "FranklinSecrets.template.json",
         "terminationProtection": false,
         "validateOnSynth": false,
-        "assumeRoleArn": "arn:${AWS::Partition}:iam::276773460589:role/cdk-hnb659fds-deploy-role-276773460589-us-west-2",
-        "cloudFormationExecutionRoleArn": "arn:${AWS::Partition}:iam::276773460589:role/cdk-hnb659fds-cfn-exec-role-276773460589-us-west-2",
-        "stackTemplateAssetObjectUrl": "s3://cdk-hnb659fds-assets-276773460589-us-west-2/7b4d186c11dbf2c738fb6c77922e6ada765207396af7b26f5c9bb78b86896e92.json",
+        "assumeRoleArn": "arn:${AWS::Partition}:iam::735029168602:role/cdk-hnb659fds-deploy-role-735029168602-us-east-2",
+        "cloudFormationExecutionRoleArn": "arn:${AWS::Partition}:iam::735029168602:role/cdk-hnb659fds-cfn-exec-role-735029168602-us-east-2",
+        "stackTemplateAssetObjectUrl": "s3://cdk-hnb659fds-assets-735029168602-us-east-2/1ba0024358c1e724e5857e85e023f4846a5d74bec1d946829856123e7f4bd961.json",
         "requiresBootstrapStackVersion": 6,
         "bootstrapStackVersionSsmParameter": "/cdk-bootstrap/hnb659fds/version",
         "additionalDependencies": [
           "FranklinSecrets.assets"
         ],
         "lookupRole": {
-          "arn": "arn:${AWS::Partition}:iam::276773460589:role/cdk-hnb659fds-lookup-role-276773460589-us-west-2",
+          "arn": "arn:${AWS::Partition}:iam::735029168602:role/cdk-hnb659fds-lookup-role-735029168602-us-east-2",
           "requiresBootstrapStackVersion": 8,
           "bootstrapStackVersionSsmParameter": "/cdk-bootstrap/hnb659fds/version"
         }

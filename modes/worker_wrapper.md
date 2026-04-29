@@ -108,15 +108,11 @@ If the user is asking for real work (write code, create a PR, fix a bug, impleme
 
 **Why:** DM tasks and brain-created quests run in parallel from the same cycle. If a dm_reply worker also does the work, it races with the quest and produces duplicates.
 
-**Daily review threads:** If the `thread_context` contains a daily service health review, read `playbooks/DailyReviewFeedback.md` for feedback-handling instructions before replying.
-
 ---
 
 ## Step 1d — Playbook-driven tasks
 
-If your task context includes a `playbook` field (e.g., `"playbook": "PRMonitor.md"`), read `playbooks/<playbook>` and follow it.
-
-If your task type is `pr_monitor` (even without a `playbook` field), read `playbooks/PRMonitor.md` and follow it.
+If your task context includes a `playbook` field, read `playbooks/<playbook>` and follow it.
 
 ---
 
@@ -142,18 +138,7 @@ GitHub, Jira, Datadog, Atlassian, Confluence — all available as MCP tools. For
 
 ### Playbooks
 
-Multi-phase orchestration guides live in `playbooks/` in this repo. These describe end-to-end workflows that span multiple skills and tools.
-
-To discover what's available: `ls playbooks/`
-To use a playbook: read it and follow the phases that apply to your task.
-
-| Playbook | When to use |
-|----------|-------------|
-| `DevWorkflow.md` | Any dev task: ticket → plan → implement → PR → CI babysit → cleanup |
-| `JiraWorkflow.md` | Jira ticket transitions: when to move between lanes, evidence requirements |
-| `DeployApproval.md` | Deploy approval quests: verify staging health, DM recommendation with evidence |
-| `PRMonitor.md` | PR monitor tasks: fix CI, address review comments, resolve conflicts |
-| `TicketLifecycleAudit.md` | Scheduled audit: cross-reference Jira/GitHub/ArgoCD/Datadog, advance stale tickets |
+Multi-phase orchestration guides live in `playbooks/` in this repo. To discover what's available: `ls playbooks/`. Read the relevant file and follow the phases that apply.
 
 ### Skills library
 
@@ -166,17 +151,11 @@ To use a skill: read `~/DevEnv/skills/<name>/SKILL.md` and follow its instructio
 
 | Task | Approach |
 |------|----------|
-| Send a Telegram message | Use `telegram_send.ts` script (see Tone & messaging section) |
+| Send a Discord message | Use `discord_send.ts` script (see Tone & messaging section) |
 | Send an email | `gws-gmail-send` skill |
 | Reply to an email | `gws-gmail-reply` skill |
 | Forward an email | `gws-gmail-forward` skill |
-| Analyze or review a PR | `analyze-pr` skill |
-| Monitor a PR through CI/review | `babysit-pr` skill |
-| Create or update a Jira ticket | `jira-ticket` skill |
 | Calendar operations | `gws-calendar` skill |
-| Datadog investigation | `oncall-triage` skill, or MCP tools directly |
-| Create a PR from local changes | `create-pr` skill |
-| SonarQube scan | `sonar-scan` skill |
 | Store/recall knowledge | `vector-memory` skill (or use the CLI directly — see Steps 1b and 3) |
 
 If the task doesn't fit any pattern, figure it out. Combine tools and skills. Read more skill files if the names look relevant. You're autonomous — act like it.
@@ -189,11 +168,10 @@ When the user gives feedback, corrections, or instructions about how Franklin sh
 |---|---|
 | How Franklin reasons about signals | `modes/brain.md` |
 | How workers execute tasks | `modes/worker_wrapper.md` |
-| Dev workflow process | `playbooks/DevWorkflow.md` |
 | Franklin's identity, tone, rules | `CLAUDE.md` |
 | User preferences, authorized users | `state/settings.json` |
 | Scheduled jobs | `state/scheduled_tasks.json` |
-| Domain knowledge, team context | `knowledge/` directory |
+| Domain knowledge | `knowledge/` directory |
 | Scout behavior | `src/scouts/*.ts` (careful — these are code) |
 
 Read the file first, make the edit, confirm to the user what you changed. For code files (`.ts`), be conservative — describe the change and ask before editing unless the user explicitly told you to change it.
@@ -206,10 +184,9 @@ When messaging the user (Telegram DMs, thread replies):
 - Read `settings.json` → `user_profile.tone` and write in that voice.
 - **Send as the Franklin bot** using the send script:
   ```bash
-  npx tsx src/scripts/telegram_send.ts message --chat_id <chat_id> --text "<message>" [--reply_to <message_id>]
+  npx tsx src/scripts/discord_send.ts message --channel_id <channel_id> --text "<message>"
   ```
-  - `chat_id`: from task context `channel` field (Telegram chat ID as string)
-  - `reply_to`: from task context `thread_ts` field (if present, to reply in-thread to a specific message)
+  - `channel_id`: from task context `channel` field (Discord thread or channel ID)
 - After sending a DM to the user, fire the notification sound:
   ```bash
   osascript -e 'display notification "<brief summary>" with title "Franklin" sound name "Blow"'
@@ -295,7 +272,7 @@ Include enough context in `pending_context` so the next worker can pick up where
   "pending_context": {
     "original_type": "dm_reply",
     "intent": "send email to John about lunch",
-    "question": "Which John — John Smith (john.smith@circle.com) or John Lee (john.lee@circle.com)?",
+    "question": "Which John — John Smith or John Lee?",
     "thread_ts": "1234567890",
     "channel": "1234567890",
     "progress": "Identified two possible recipients, waiting for disambiguation"
