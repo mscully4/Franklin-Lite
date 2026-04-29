@@ -87,9 +87,12 @@ const settings = readJson<{ user_profile?: { discord_user_id?: string } }>(
 );
 const ownerUserId = settings?.user_profile?.discord_user_id ?? "";
 
+type ThreadMessage = { author: string; text: string; ts: string };
+type InboxEvent = ReturnType<typeof db.getPendingSlackEvents>[number] & { thread_context: ThreadMessage[] | null };
+
 const pendingEvents = db.getPendingSlackEvents();
 const handlerChannels = new Set(CHANNEL_SIGNAL_HANDLERS.map((h) => h.channel));
-const inboxEvents: typeof pendingEvents = [];
+const inboxEvents: InboxEvent[] = [];
 let channelSignalCount = 0;
 
 for (const event of pendingEvents) {
@@ -111,7 +114,11 @@ for (const event of pendingEvents) {
       channelSignalCount++;
     }
   } else if (!handlerChannels.has(event.channel)) {
-    inboxEvents.push(event);
+    const threadContext = (event.raw as Record<string, unknown>)?.thread_context;
+    inboxEvents.push({
+      ...event,
+      thread_context: Array.isArray(threadContext) ? (threadContext as ThreadMessage[]) : null,
+    });
   }
   // else: known handler channel but criteria not met → drop silently
 }

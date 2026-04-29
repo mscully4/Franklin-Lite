@@ -188,6 +188,7 @@ interface SlackInboxEvent {
   reaction?: string;
   text?: string;
   thread_ts?: string;
+  thread_context?: Array<{ author: string; text: string; ts: string }> | null;
   received_at: string;
 }
 
@@ -221,7 +222,7 @@ function generateDmTasks(): DelegationTask[] {
         type: event.type,
         reaction: null,
         thread_ts: event.thread_ts ?? null,
-        thread_context: null,
+        thread_context: event.thread_context ?? null,
         source_tag: "dm",
         quest_id: null,
         mode,

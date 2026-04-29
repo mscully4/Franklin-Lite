@@ -278,9 +278,20 @@ function writeDiscordHeartbeat(status: string): void {
     log.info(`[discord] message from=${msg.author.id} channel=${msg.channelId} text=${msg.content.slice(0, 80)}`);
 
     let threadId: string;
+    let threadContext: Array<{ author: string; text: string; ts: string }> = [];
 
     if (msg.channel.isThread()) {
       threadId = msg.channelId;
+      try {
+        const messages = await msg.channel.messages.fetch({ limit: 50 });
+        threadContext = [...messages.values()]
+          .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+          .filter((m) => m.content)
+          .map((m) => ({ author: m.author.username, text: m.content, ts: m.id }));
+      } catch (err) {
+        log.warn(`[discord] failed to fetch thread history: ${(err as Error).message}`);
+        threadContext = [{ author: msg.author.username, text: msg.content, ts: msg.id }];
+      }
     } else {
       try {
         const thread = await msg.startThread({
@@ -291,6 +302,7 @@ function writeDiscordHeartbeat(status: string): void {
         log.error(`[discord] failed to create thread: ${(err as Error).message}`);
         threadId = msg.channelId;
       }
+      threadContext = [{ author: msg.author.username, text: msg.content, ts: msg.id }];
     }
 
     db.insertSlackEvent({
@@ -301,7 +313,7 @@ function writeDiscordHeartbeat(status: string): void {
       type: "message",
       text: msg.content,
       thread_ts: threadId,
-      raw: msg.toJSON() as Record<string, unknown>,
+      raw: { ...(msg.toJSON() as Record<string, unknown>), thread_context: threadContext },
     });
 
     try {
