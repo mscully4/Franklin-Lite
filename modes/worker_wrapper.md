@@ -50,7 +50,7 @@ Valid `every` values:
 
 If your task context has a `thread_context` field, **read it first** — it contains the full thread (parent message + all replies) pre-fetched at dispatch time. This is your primary source of context for understanding what the user is asking. The `text` field only contains the single message that triggered the task, which may be a bare "yes" or "do that one" with no context.
 
-For Telegram-based tasks, `thread_context` is pre-fetched at dispatch time. Thread fetching is not needed — the task context includes all conversation history.
+For Discord-based tasks, `thread_context` is pre-fetched at dispatch time. Thread fetching is not needed — the task context includes all conversation history.
 
 Skip this for tasks with no `thread_ts` (scheduled tasks, signal-based tasks).
 
@@ -116,6 +116,21 @@ If your task context includes a `playbook` field, read `playbooks/<playbook>` an
 
 ---
 
+## Step 1e — Integration guides
+
+If your task involves working with an external service (Monarch Money, Google Workspace, etc.), check `integrations/` for a guide:
+```bash
+ls integrations/
+```
+
+Read the relevant `.md` file if it exists (e.g., `integrations/GWS.md` for Google Workspace tasks). These guides cover:
+- What data the integration monitors
+- Allowed operations and read-only rules
+- Common commands and patterns
+- Skills or tools to use
+
+---
+
 ## Step 2 — Execute
 
 ### Implementation discipline
@@ -157,6 +172,7 @@ To use a skill: read `~/DevEnv/skills/<name>/SKILL.md` and follow its instructio
 | Forward an email | `gws-gmail-forward` skill |
 | Calendar operations | `gws-calendar` skill |
 | Store/recall knowledge | `vector-memory` skill (or use the CLI directly — see Steps 1b and 3) |
+| Monarch Money (accounts, budgets, transactions) | Use `mmoney` skill |
 
 If the task doesn't fit any pattern, figure it out. Combine tools and skills. Read more skill files if the names look relevant. You're autonomous — act like it.
 
@@ -180,7 +196,7 @@ Read the file first, make the edit, confirm to the user what you changed. For co
 
 ## Tone & messaging
 
-When messaging the user (Telegram DMs, thread replies):
+When messaging the user (Discord DMs, thread replies):
 - Read `settings.json` → `user_profile.tone` and write in that voice.
 - **Send as the Franklin bot** using the send script:
   ```bash
@@ -281,7 +297,7 @@ Include enough context in `pending_context` so the next worker can pick up where
 - Where the conversation is happening (`thread_ts`, `channel`)
 - What work was already done (`progress`)
 
-The next worker will see the user's reply in its message context plus the conversation history. It does NOT read prior worker results — all continuation context must be in the Telegram conversation itself.
+The next worker will see the user's reply in its message context plus the conversation history. It does NOT read prior worker results — all continuation context must be in the Discord conversation itself.
 
 ---
 

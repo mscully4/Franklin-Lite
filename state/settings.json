@@ -19,7 +19,8 @@
   },
   "integrations": [
     "discord",
-    "gws"
+    "gws",
+    "mmoney"
   ],
   "disabled_scouts": ["gmail", "calendar"]
 }
