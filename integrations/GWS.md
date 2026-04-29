@@ -50,9 +50,8 @@ gws calendar +agenda --today --format json | jq '.events | map({summary, start, 
    - Preserve `notified: true` — never reset it.
 3. Write the updated `calendar.json`.
 
-**Pre-meeting alerts** — for any event with `notified: false` and start ≤15 min away (and >0 min), fire both in parallel:
-1. macOS notification: `osascript -e 'display notification "<title>" with title "Franklin ☕" subtitle "Starting in ~N min" sound name "Hero"'`
-2. Slack DM to user with title, time, attendees, and linked docs (use `gws-workflow-meeting-prep`).
+**Pre-meeting alerts** — for any event with `notified: false` and start ≤15 min away (and >0 min):
+1. Slack DM to user with title, time, attendees, and linked docs (use `gws-workflow-meeting-prep`).
 
 Set `notified: true` and save `calendar.json`.
 
@@ -147,7 +146,7 @@ If the list is empty, skip silently — transcription may not have been enabled.
 
    Skill: `python3 ~/DevEnv/skills/vector-memory/memory.py`
 
-5. DM user with summary + osascript Hero sound. Include every non-empty field from the extracted summary:
+5. DM user with summary. Include every non-empty field from the extracted summary:
    ```
    📝 Weekly Sync — 10:00am (32 min)
 

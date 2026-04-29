@@ -187,11 +187,6 @@ When messaging the user (Telegram DMs, thread replies):
   npx tsx src/scripts/discord_send.ts message --channel_id <channel_id> --text "<message>"
   ```
   - `channel_id`: from task context `channel` field (Discord thread or channel ID)
-- After sending a DM to the user, fire the notification sound:
-  ```bash
-  osascript -e 'display notification "<brief summary>" with title "Franklin" sound name "Blow"'
-  ```
-
 Only message the user when the task requires it (replies, alerts, notifications). Background tasks write their result to disk silently.
 
 ---

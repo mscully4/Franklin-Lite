@@ -140,9 +140,6 @@ function runStartupChecks(enabledScouts: string[]): void {
   if (failures.length > 0) {
     const msg = `Startup failed — unreachable: ${failures.join(", ")}`;
     log.fatal(msg);
-    try {
-      execSync(`osascript -e 'display notification "${msg}" with title "Franklin ☕" subtitle "Startup aborted" sound name "Blow"'`);
-    } catch { /* macOS notification best-effort */ }
     process.exit(1);
   }
 
