@@ -219,7 +219,7 @@ export function spawnBackgroundTask(task: DelegationTask): void {
   // Spawn claude process
   const child = spawn("claude",
     ["--dangerously-skip-permissions", "--print", "--output-format", "json", "-p", promptArg],
-    { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], detached: false },
+    { cwd: "/tmp", stdio: ["ignore", "pipe", "pipe"], detached: false },
   );
 
   const pid = child.pid ?? 0;
