@@ -213,8 +213,8 @@ export function spawnBackgroundTask(task: DelegationTask): void {
   taskDb.close();
 
   // Build prompt
-  const questRef = questId ? ` Quest state: state/quests/active/${questId}.json` : "";
-  const promptArg = `Read modes/worker_wrapper.md and execute. The task ID is ${task.id}.${questRef}`;
+  const questRef = questId ? ` Quest state: ${ROOT}/state/quests/active/${questId}.json` : "";
+  const promptArg = `Franklin codebase: ${ROOT}. Read ${ROOT}/modes/worker_wrapper.md and execute. The task ID is ${task.id}.${questRef}`;
 
   // Spawn claude process
   const child = spawn("claude",
