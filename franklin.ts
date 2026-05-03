@@ -556,8 +556,14 @@ function runCycle(startedAt: string): void {
   // Write inflight signals snapshot — informs brain of in-progress work
   writeInflightSignals();
 
-  // Brain tick — handles Gmail signals
-  runBrain();
+  // Brain tick — only run if there's something to process
+  const signals = readJson<unknown[]>(join(ROOT, "state", "brain_input", "signals.json")) ?? [];
+  const hasBrainWork = signals.length > 0 || dmTasks.length > 0 || scheduledTasks.length > 0;
+  if (hasBrainWork) {
+    runBrain();
+  } else {
+    log.debug("No signals — skipping brain");
+  }
 
   // Merge: dm tasks + scheduled tasks + brain's tasks
   const brainDelegation = readJsonWithSchema(DELEGATION_FILE, DelegationSchema);
