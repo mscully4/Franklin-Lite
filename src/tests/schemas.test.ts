@@ -7,6 +7,8 @@ import {
   ScheduledTaskSchema,
   SettingsSchema,
   DelegationSchema,
+  EventHandlerSchema,
+  ReactionEventSchema,
 } from "../schemas.js";
 
 describe("DelegationTaskSchema", () => {
@@ -225,5 +227,99 @@ describe("DelegationSchema", () => {
       tasks: [{ id: 123, type: "x" }], // id should be string, missing fields
     };
     assert.ok(!DelegationSchema.safeParse(data).success);
+  });
+});
+
+describe("EventHandlerSchema", () => {
+  test("accepts script handler with command", () => {
+    const data = {
+      id: "deal-dash-post",
+      event_type: "deal-dash",
+      sub_type: null,
+      kind: "script" as const,
+      command: "npx tsx src/scripts/discord_post_deal.ts",
+      timeout: 30000,
+      description: "Post deal embed",
+      context: { channel_id: "1502059393724715038" },
+    };
+    assert.ok(EventHandlerSchema.safeParse(data).success);
+  });
+
+  test("accepts worker handler without command", () => {
+    const data = {
+      id: "complex-request",
+      event_type: "user-request",
+      sub_type: null,
+      kind: "worker" as const,
+    };
+    assert.ok(EventHandlerSchema.safeParse(data).success);
+  });
+
+  test("accepts handler with non-null sub_type", () => {
+    const data = {
+      id: "deal-reaction",
+      event_type: "reaction",
+      sub_type: "deal-dash",
+      kind: "script" as const,
+      command: "npx tsx src/scripts/sns_publish_feedback.ts",
+    };
+    assert.ok(EventHandlerSchema.safeParse(data).success);
+  });
+
+  test("rejects handler missing id", () => {
+    const data = { event_type: "deal-dash", sub_type: null, kind: "script" as const };
+    assert.ok(!EventHandlerSchema.safeParse(data).success);
+  });
+
+  test("rejects handler with invalid kind", () => {
+    const data = { id: "x", event_type: "x", sub_type: null, kind: "lambda" };
+    assert.ok(!EventHandlerSchema.safeParse(data).success);
+  });
+
+  test("validates array of handlers", () => {
+    const arr = [
+      { id: "a", event_type: "deal-dash", sub_type: null, kind: "script" as const, command: "echo hi" },
+      { id: "b", event_type: "reaction", sub_type: "deal-dash", kind: "script" as const, command: "echo bye" },
+    ];
+    assert.ok(z.array(EventHandlerSchema).safeParse(arr).success);
+  });
+});
+
+describe("ReactionEventSchema", () => {
+  test("accepts valid reaction event", () => {
+    const data = {
+      message_id: "1234567890123456789",
+      channel_id: "1502059393724715038",
+      user_id: "987654321098765432",
+      emoji: "👍",
+      reacted_at: "2026-05-18T00:00:00.000Z",
+      sub_type: "deal-dash",
+      meta: { upc: "012345678901", title: "Widget Pro", retailer: "Best Buy" },
+    };
+    assert.ok(ReactionEventSchema.safeParse(data).success);
+  });
+
+  test("rejects reaction missing sub_type", () => {
+    const data = {
+      message_id: "1234567890123456789",
+      channel_id: "1502059393724715038",
+      user_id: "987654321098765432",
+      emoji: "👍",
+      reacted_at: "2026-05-18T00:00:00.000Z",
+      meta: {},
+    };
+    assert.ok(!ReactionEventSchema.safeParse(data).success);
+  });
+
+  test("rejects reaction missing message_id", () => {
+    const data = {
+      channel_id: "1502059393724715038",
+      user_id: "987654321098765432",
+      emoji: "👍",
+      reacted_at: "2026-05-18T00:00:00.000Z",
+      sub_type: "deal-dash",
+      meta: {},
+    };
+    assert.ok(!ReactionEventSchema.safeParse(data).success);
   });
 });
