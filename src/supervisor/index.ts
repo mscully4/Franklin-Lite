@@ -3,6 +3,7 @@ import { mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { SCOUT_INTERVALS_MS, readJson, readJsonWithSchema, writeJson, DelegationSchema } from "../config.js";
+import type { DelegationTask, Delegation } from "../config.js";
 import { initTaskManager, reapTasks, writeInflightSignals } from "./task-manager.js";
 import { openDb } from "../db/index.js";
 import { checkLock, writeLock, deleteLock, readLock } from "./lock.js";
@@ -114,14 +115,17 @@ function runCycle(startedAt: string): void {
 
     const signals = readJson<unknown[]>(join(ROOT, "state", "brain_input", "signals.json")) ?? [];
     const hasBrainWork = signals.length > 0 || scheduledTasks.length > 0;
+    let brainTasks: DelegationTask[] = [];
+    let markSurfacedOnly: Delegation["mark_surfaced_only"] = [];
     if (hasBrainWork) {
       runBrain();
+      const brainDelegation = readJsonWithSchema(DELEGATION_FILE, DelegationSchema);
+      brainTasks = brainDelegation?.tasks ?? [];
+      markSurfacedOnly = brainDelegation?.mark_surfaced_only ?? [];
     } else {
       log.debug("No signals — skipping brain");
     }
 
-    const brainDelegation = readJsonWithSchema(DELEGATION_FILE, DelegationSchema);
-    const brainTasks = brainDelegation?.tasks ?? [];
     const allTasks = [...scheduledTasks, ...brainTasks];
 
     if (allTasks.length) {
@@ -140,15 +144,14 @@ function runCycle(startedAt: string): void {
       log.debug("No tasks this cycle");
     }
 
-    const markOnly = brainDelegation?.mark_surfaced_only ?? [];
-    if (markOnly.length) {
+    if (markSurfacedOnly.length) {
       const msDb = openDb();
-      for (const entry of markOnly) {
+      for (const entry of markSurfacedOnly) {
         log.info(` markSurfacedOnly: ${entry.id}`);
         msDb.markSurfaced(entry.id, entry.state);
       }
       msDb.close();
-      log.info(` Marked ${markOnly.length} signal(s) as surfaced (no task dispatched)`);
+      log.info(` Marked ${markSurfacedOnly.length} signal(s) as surfaced (no task dispatched)`);
     }
 
     const todayLocal = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-${String(new Date().getDate()).padStart(2, "0")}`;

@@ -241,17 +241,24 @@ function writeDiscordHeartbeat(status: string): void {
   );
 }
 
-(async () => {
-  let discordToken: string;
-  try {
-    const response = await sm.send(new GetSecretValueCommand({ SecretId: "franklin/discord-bot-token" }));
-    if (!response.SecretString) throw new Error("Secret has no string value");
-    discordToken = response.SecretString;
-  } catch (err) {
-    log.error(`[discord] failed to fetch token from Secrets Manager: ${(err as Error).message}`);
-    writeDiscordHeartbeat("error");
-    return;
+async function fetchDiscordToken(): Promise<string> {
+  const delays = [5_000, 15_000, 30_000, 60_000, 120_000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await sm.send(new GetSecretValueCommand({ SecretId: "franklin/discord-bot-token" }));
+      if (!response.SecretString) throw new Error("Secret has no string value");
+      return response.SecretString;
+    } catch (err) {
+      const delay = delays[Math.min(attempt, delays.length - 1)];
+      log.error(`[discord] failed to fetch token (attempt ${attempt + 1}): ${(err as Error).message} — retrying in ${delay / 1000}s`);
+      writeDiscordHeartbeat("error");
+      await new Promise((r) => setTimeout(r, delay));
+    }
   }
+}
+
+(async () => {
+  const discordToken = await fetchDiscordToken();
 
   const settingsForAuth = readJson<{
     authorized_users?: Array<{ discord_user_id?: string }>;
