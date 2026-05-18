@@ -2,7 +2,7 @@ import express from "express";
 import { readFileSync, readdirSync, writeFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { openDb } from "./src/db.js";
 import { SCOUT_INTERVALS_MS, readJson } from "./src/config.js";
@@ -269,6 +269,7 @@ function writeDiscordHeartbeat(status: string): void {
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMessageReactions,
     ],
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction],
   });
 
   client.on("messageCreate", async (msg) => {
