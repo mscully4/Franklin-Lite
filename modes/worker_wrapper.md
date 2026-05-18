@@ -200,7 +200,7 @@ When messaging the user (Discord DMs, thread replies):
 - Read `settings.json` → `user_profile.tone` and write in that voice.
 - **Send as the Franklin bot** using the send script:
   ```bash
-  npx tsx src/scripts/discord_send.ts message --channel_id <channel_id> --text "<message>"
+  npx tsx src/actions/discord-send.ts message --channel_id <channel_id> --text "<message>"
   ```
   - `channel_id`: from task context `channel` field (Discord thread or channel ID)
 Only message the user when the task requires it (replies, alerts, notifications). Background tasks write their result to disk silently.
@@ -230,7 +230,7 @@ If your quest requires running `docker compose up` (e.g. to spin up postgres or 
 
 ```bash
 # 1. Claim a loopback IP and write the compose override
-DOCKER_CLAIM=$(npx tsx src/scripts/docker_claim.ts <task_id> <repo_path>)
+DOCKER_CLAIM=$(npx tsx src/actions/docker-claim.ts <task_id> <repo_path>)
 DOCKER_IP=$(echo "$DOCKER_CLAIM" | jq -r '.ip')
 
 # 2. Read per-repo env vars and export them
@@ -248,7 +248,7 @@ The claim script writes a `docker-compose.override.yml` in the repo that rebinds
 
 ```bash
 docker compose down
-npx tsx src/scripts/docker_release.ts <task_id> <repo_path>
+npx tsx src/actions/docker-release.ts <task_id> <repo_path>
 ```
 
 The release script nulls the IP in the DB and removes the override file.

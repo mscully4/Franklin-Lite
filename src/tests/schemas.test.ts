@@ -237,7 +237,7 @@ describe("EventHandlerSchema", () => {
       event_type: "deal-dash",
       sub_type: null,
       kind: "script" as const,
-      command: "npx tsx src/scripts/discord_post_deal.ts",
+      command: "npx tsx src/actions/discord-post-deal.ts",
       timeout: 30000,
       description: "Post deal embed",
       context: { channel_id: "1502059393724715038" },
@@ -261,7 +261,7 @@ describe("EventHandlerSchema", () => {
       event_type: "reaction",
       sub_type: "deal-dash",
       kind: "script" as const,
-      command: "npx tsx src/scripts/sns_publish_feedback.ts",
+      command: "npx tsx src/actions/sns-publish-feedback.ts",
     };
     assert.ok(EventHandlerSchema.safeParse(data).success);
   });
