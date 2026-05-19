@@ -6,7 +6,7 @@ import { z } from "zod";
 import { openDb } from "../db/index.js";
 import {
   readJson, readJsonWithSchema, writeJson,
-  ScheduledTaskSchema,
+  ScheduledTaskSchema, SettingsSchema,
 } from "../config.js";
 import type { DelegationTask, WorkerResult, DispatchLogEntry, Delegation } from "../config.js";
 import { spawnBackgroundTask } from "./task-manager.js";
@@ -40,6 +40,66 @@ export function runBrain(): void {
   if (result.status !== 0) {
     log.error(` Brain exited with status ${result.status ?? "timeout"}`);
   }
+}
+
+// ── Discord DM inbox ────────────────────────────────────────────────────────
+
+const SLACK_INBOX_FILE = join(ROOT, "state", "brain_input", "slack_inbox.json");
+
+type SlackInboxEntry = {
+  event_ts: string;
+  channel: string;
+  channel_type: string;
+  user_id: string | null;
+  type: string;
+  text: string | null;
+  thread_ts: string | null;
+  thread_context?: Array<{ author: string; text: string; ts: string }> | null;
+  received_at: string;
+};
+
+export function generateDmTasks(): DelegationTask[] {
+  const inbox = readJson<SlackInboxEntry[]>(SLACK_INBOX_FILE) ?? [];
+  if (!inbox.length) return [];
+
+  const settings = readJsonWithSchema(SETTINGS_FILE, SettingsSchema);
+  const authorizedIds = new Set(
+    (settings?.authorized_users ?? []).map((u) => u.discord_user_id),
+  );
+
+  const tasks: DelegationTask[] = [];
+
+  for (const event of inbox) {
+    if (!event.user_id) continue;
+    if (!authorizedIds.has(event.user_id)) continue;
+
+    tasks.push({
+      id: `dm-${event.event_ts}`,
+      type: "dm_reply",
+      priority: "high",
+      context: {
+        event_ts: event.event_ts,
+        channel: event.channel,
+        channel_type: event.channel_type,
+        user_id: event.user_id,
+        text: event.text ?? null,
+        type: event.type,
+        thread_ts: event.thread_ts ?? null,
+        thread_context: event.thread_context ?? null,
+        source_tag: "discord_dm",
+        mode: settings?.mode ?? "drafts_only",
+      },
+      mark_surfaced: null,
+    });
+  }
+
+  // Clear the inbox so events don't re-fire
+  writeJson(SLACK_INBOX_FILE, []);
+
+  if (tasks.length) {
+    log.info(` Generated ${tasks.length} dm_reply task(s) from Discord inbox`);
+  }
+  return tasks;
 }
 
 // ── Scheduled tasks ──────────────────────────────────────────────────────────

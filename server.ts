@@ -1,16 +1,17 @@
 import express from "express";
-import { readFileSync, readdirSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { openDb } from "./src/db/index.js";
-import { SCOUT_INTERVALS_MS, readJson } from "./src/config.js";
+import { SCOUT_INTERVALS_MS, readJson, writeJson } from "./src/config.js";
 import { createLogger } from "./src/logger.js";
 const log = createLogger("server");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE = join(__dirname, "state");
+const BRAIN_INPUT = join(STATE, "brain_input");
 const PORT = 7070;
 const app = express();
 app.use(express.json());
@@ -314,16 +315,23 @@ async function fetchDiscordToken(): Promise<string> {
       threadContext = [{ author: msg.author.username, text: msg.content, ts: msg.id }];
     }
 
-    db.insertSlackEvent({
-      event_ts: msg.id,
-      channel: threadId,
-      channel_type: "im",
-      user_id: msg.author.id,
-      type: "message",
-      text: msg.content,
-      thread_ts: threadId,
-      raw: { ...(msg.toJSON() as Record<string, unknown>), thread_context: threadContext },
-    });
+    const inboxFile = join(BRAIN_INPUT, "slack_inbox.json");
+    mkdirSync(BRAIN_INPUT, { recursive: true });
+    const inbox = readJson<Array<Record<string, unknown>>>(inboxFile) ?? [];
+    if (!inbox.some((e) => e.event_ts === msg.id)) {
+      inbox.push({
+        event_ts: msg.id,
+        channel: threadId,
+        channel_type: "im",
+        user_id: msg.author.id,
+        type: "message",
+        text: msg.content,
+        thread_ts: threadId,
+        thread_context: threadContext,
+        received_at: new Date().toISOString(),
+      });
+      writeJson(inboxFile, inbox);
+    }
 
     try {
       await msg.react('🦝');
@@ -357,16 +365,12 @@ async function fetchDiscordToken(): Promise<string> {
 
     const emoji = fullReaction.emoji.name ?? "";
     const userId = typeof user.id === "string" ? user.id : "";
-    const reactionTs = `reaction:${msg.id}:${userId}:${emoji}`;
 
-    db.insertSlackEvent({
-      event_ts: reactionTs,
-      channel: msg.channelId,
-      channel_type: "reaction",
-      user_id: userId,
-      type: "reaction",
-      reaction: emoji,
-      raw: {
+    const rxnFile = join(BRAIN_INPUT, "discord_reactions.json");
+    mkdirSync(BRAIN_INPUT, { recursive: true });
+    const rxns = readJson<Array<Record<string, unknown>>>(rxnFile) ?? [];
+    if (!rxns.some((r) => r.message_id === msg.id && r.user_id === userId && r.emoji === emoji)) {
+      rxns.push({
         message_id: msg.id,
         channel_id: msg.channelId,
         user_id: userId,
@@ -374,8 +378,9 @@ async function fetchDiscordToken(): Promise<string> {
         reacted_at: new Date().toISOString(),
         sub_type: meta.sub_type,
         meta,
-      },
-    });
+      });
+      writeJson(rxnFile, rxns);
+    }
 
     log.info(`[discord] reaction ${emoji} on message ${msg.id} from ${userId} (sub_type=${meta.sub_type})`);
   });

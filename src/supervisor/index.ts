@@ -10,7 +10,7 @@ import { checkLock, writeLock, deleteLock, readLock } from "./lock.js";
 import { readLastRun, writeLastRun, isScoutDue, runStartupChecks, runScout } from "./scouts.js";
 import {
   appendDispatchLog, runBrain,
-  generateScheduledTasks,
+  generateDmTasks, generateScheduledTasks,
   dispatchTasks, updateScheduledTaskResult,
 } from "./pipeline.js";
 import log from "../logger.js";
@@ -110,6 +110,7 @@ function runCycle(startedAt: string): void {
       if (r.scheduledTaskId) updateScheduledTaskResult(r.scheduledTaskId, r.status);
     }
 
+    const dmTasks = generateDmTasks();
     const scheduledTasks = generateScheduledTasks();
     writeInflightSignals();
 
@@ -126,7 +127,7 @@ function runCycle(startedAt: string): void {
       log.debug("No signals — skipping brain");
     }
 
-    const allTasks = [...scheduledTasks, ...brainTasks];
+    const allTasks = [...dmTasks, ...scheduledTasks, ...brainTasks];
 
     if (allTasks.length) {
       const idDb = openDb();
@@ -138,7 +139,7 @@ function runCycle(startedAt: string): void {
     if (allTasks.length) {
       const merged = { generated_at: new Date().toISOString(), tasks: allTasks };
       writeJson(DELEGATION_FILE, merged);
-      log.info(` Dispatching ${allTasks.length} task(s) (${scheduledTasks.length} sched, ${brainTasks.length} brain)...`);
+      log.info(` Dispatching ${allTasks.length} task(s) (${dmTasks.length} dm, ${scheduledTasks.length} sched, ${brainTasks.length} brain)...`);
       dispatchTasks(merged);
     } else {
       log.debug("No tasks this cycle");

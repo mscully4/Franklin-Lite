@@ -18,10 +18,11 @@ Read all of these. Missing files are not errors — treat as empty.
 
 ```
 state/brain_input/signals.json          changed stateful signals (gmail)
+state/brain_input/slack_inbox.json      Discord DM messages (cleared by supervisor before brain)
 state/brain_input/inflight_signals.json  signals with active tasks (array of signal_ids)
 state/scout_results/sqs.json            inbound SQS messages from external services
 state/event_handlers.json               configurable event handler registry
-state/brain_input/discord_reactions.json Discord reaction events (drained by SQS scout)
+state/brain_input/discord_reactions.json Discord reaction events
 state/settings.json                     user identity, authorized_users
 state/discord_bot.json                  Discord bot health
 state/last_run.json                     timestamps from last cycle
