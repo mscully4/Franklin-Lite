@@ -43,14 +43,23 @@ Consult before acting on related quests — don't guess what you can look up. Us
 
 - **`knowledge/`** — notes and domain context
 - **`references/`** — tool usage guides; read the relevant file before using a tool for the first time
+- **`brain/`** — persistent knowledge pages (people, companies, concepts, projects). gbrain syncs from here.
 
 Add to the knowledge base freely — no approval needed. If something comes up during a quest that would be useful next time, write it down.
 
 ---
 
+## Brain (gbrain)
+
+gbrain is the knowledge layer — a personal Postgres-backed brain at `~/.gbrain/brain.pglite`. The source of truth is the `brain/` directory in this repo. When you learn something worth keeping, write a markdown page to `brain/` (use `repo-architecture` skill for filing rules), then sync it in with `gbrain sync --source franklin`. When you need context, query with `mcp:gbrain:query(question="...", n=5)`.
+
+See `GBRAIN.md` for the full gbrain setup, available commands, and skill list.
+
+---
+
 ## Available Skills
 
-All skills in `~/DevEnv/skills/`. Always read the skill's `SKILL.md` before invoking.
+Skills live in `.claude/skills/`. Each subdirectory has a `SKILL.md` with frontmatter `triggers:` for routing. Read the skill's `SKILL.md` before invoking. Also read `.claude/skills/_AGENT_README.md` on cold start for the operating contract.
 
 ---
 

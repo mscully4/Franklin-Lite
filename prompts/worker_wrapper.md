@@ -129,6 +129,8 @@ Read the relevant `.md` file if it exists (e.g., `integrations/GWS.md` for Googl
 - Common commands and patterns
 - Skills or tools to use
 
+Also read `GBRAIN.md` for the gbrain knowledge layer — available commands, brain/ directory structure, and sync workflow.
+
 ---
 
 ## Step 2 — Execute
@@ -157,10 +159,10 @@ Multi-phase orchestration guides live in `playbooks/` in this repo. To discover 
 
 ### Skills library
 
-Reusable skill files live at `~/DevEnv/skills/`. Each subdirectory has a `SKILL.md` with full instructions.
+Reusable skill files live at `.claude/skills/`. Each subdirectory has a `SKILL.md` with frontmatter `triggers:` for routing.
 
-To discover what's available: `ls ~/DevEnv/skills/`
-To use a skill: read `~/DevEnv/skills/<name>/SKILL.md` and follow its instructions.
+To discover what's available: `ls .claude/skills/`
+To use a skill: read `.claude/skills/<name>/SKILL.md` and follow its instructions.
 
 **Common patterns** (not exhaustive — use judgment):
 
@@ -171,7 +173,7 @@ To use a skill: read `~/DevEnv/skills/<name>/SKILL.md` and follow its instructio
 | Reply to an email | `gws-gmail-reply` skill |
 | Forward an email | `gws-gmail-forward` skill |
 | Calendar operations | `gws-calendar` skill |
-| Store/recall knowledge | `gbrain` MCP tools: `query` to search, `put_page` to write (see Steps 1b and 3) |
+| Store/recall knowledge | `mcp:gbrain:query()` to search, write to `brain/` directory + `gbrain sync --source franklin` to store (see Steps 1b and 3) |
 | Monarch Money (accounts, budgets, transactions) | Use `mmoney` skill |
 
 If the task doesn't fit any pattern, figure it out. Combine tools and skills. Read more skill files if the names look relevant. You're autonomous — act like it.
@@ -301,89 +303,65 @@ The next worker will see the user's reply in its message context plus the conver
 
 ---
 
-## Step 3 — Store learnings
+## Step 3 — Store learnings to brain/
 
-If the task produced something worth remembering for next time, upsert it to the vector store. Only store discrete, reusable knowledge — not routine task output.
+If the task produced something worth remembering for next time, write it as a markdown page to the `brain/` directory. Only store discrete, reusable knowledge — not routine task output.
 
-### Collections
+### Where to file
 
-Use the right collection for the type of content:
+Read `.claude/skills/repo-architecture/SKILL.md` for the full filing protocol, or `.claude/skills/_brain-filing-rules.md` for a quick reference. The top-level directories:
 
-| Collection | Purpose | Content style |
-|------------|---------|---------------|
-| `franklin` | Operational knowledge — bugs, decisions, feedback, tool gotchas | Short rules and facts (1-2 sentences) |
-| `meetings` | Meeting summaries — action items, decisions, key topics | Narrative prose paragraph per meeting |
-| `documents` | Document/article extracts — RFCs, postmortems, design docs, runbooks | Key points and takeaways per document |
+| Directory | Purpose |
+|-----------|---------|
+| `brain/people/` | People — preferences, role, relationship context |
+| `brain/companies/` | Companies and organizations |
+| `brain/concepts/` | Ideas, patterns, architectural concepts |
+| `brain/projects/` | Active projects, decisions, status |
+| `brain/events/` | Meetings, calls, significant occurrences |
+| `brain/references/` | Tool guides, runbooks, external references |
+| `brain/reports/` | Timestamped reports and summaries |
+| `brain/originals/` | Raw transcripts, exact-phrasing content |
 
-**`franklin`** is for things Franklin learned while doing work. **`meetings`** and **`documents`** are reference material that Franklin might need to recall later.
+### What to store
 
-### When to store
-
-**`franklin` collection — operational learnings:**
 - Bug root cause you discovered
 - Architectural decision or context about a service
 - User preference or correction ("Michael prefers X over Y")
 - A workaround for a tool limitation
-- Outcome of a quest (what worked, what didn't)
+- Meeting summaries with action items and decisions
+- Key takeaways from documents, RFCs, or postmortems
 
-**`meetings` collection — meeting transcripts:**
-- Structured summary: action items (who, what), decisions made, open questions, key topics
-- One entry per meeting, keyed by date and title
-
-**`documents` collection — document processing:**
-- Key takeaways, decisions, or action items extracted from the document
-- One entry per document, keyed by document identifier (URL slug, title, or ticket key)
-
-**Don't store (any collection):**
+**Don't store:**
 - Routine acks, status checks, simple replies
 - Raw task context (it's already in the dispatch log)
-- Anything already in the knowledge/ directory
-
-### ID format — use stable slugs
-
-IDs follow the pattern `<category>:<topic-slug>`. The slug should be **deterministic** — if two workers learn the same thing, they should produce the same ID so the second upsert overwrites the first instead of duplicating.
-
-**`franklin` collection categories:**
-
-| Category | When to use | Example ID |
-|----------|-------------|------------|
-| `feedback:` | User or team preferences | `feedback:skip-sepolia-latency` |
-| `bug:` | Root causes discovered | `bug:wallets-api-timeout-large-batch` |
-| `decision:` | Architectural or process choices | `decision:cds-shadow-mode-first` |
-| `service:` | Behavioral knowledge about a service | `service:credits-manager-dlq-retry-policy` |
-| `tool:` | Workarounds or gotchas for tools | `tool:gws-calendar-no-recurring-support` |
-
-**`meetings` collection:** `meeting:YYYY-MM-DD:<title-slug>` (e.g., `meeting:2026-04-14:dev-console-standup`)
-
-**`documents` collection:** `doc:<source-slug>` (e.g., `doc:rfc-cds-migration`, `doc:postmortem-2026-04-10-credits-outage`)
-
-Slugs are lowercase, hyphen-separated, descriptive enough to be unique but short enough to type. Don't include task IDs in slugs — those go in metadata.
-
-### Before writing, query first
-
-Check if a relevant entry already exists to avoid duplicates:
-```
-mcp:gbrain:query(question="<brief description>", n=3)
-```
-If a close match exists, update that page's slug rather than creating a new one.
+- Anything already in the `knowledge/` directory
 
 ### Write format
 
-Use the `gbrain` MCP tool `put_page`. The slug maps to the old ID format (`<category>:<topic-slug>`), and the body is markdown:
+Write a markdown file to the appropriate `brain/` subdirectory. Use YAML frontmatter with `type`, `tags`, and `date`:
 
+```markdown
+---
+type: concept
+tags: [franklin, decision]
+date: 2026-05-20
+source: <task_id or URL>
+---
+
+# <Title>
+
+<Content in markdown — be thorough but concise. Include names, dates, context.>
 ```
-mcp:gbrain:put_page(
-  slug="<category>:<topic-slug>",
-  body="---\ntags: [<collection>, <category>]\nsource: <task_id or URL>\ndate: <today ISO>\n---\n\n<content>"
-)
+
+### After writing
+
+Sync the brain so the new page is indexed for queries:
+
+```bash
+gbrain sync --source franklin
 ```
 
-**Content guidelines by collection:**
-- **`franklin`**: One or two sentences max. Write it as a rule or fact, not a narrative.
-- **`meetings`**: One paragraph summarizing the meeting. Lead with action items and decisions, then key discussion points.
-- **`documents`**: One or two paragraphs extracting the key takeaways. Focus on what's actionable or decision-relevant, not comprehensive summaries.
-
-For all collections: make content searchable — include service names, people, concepts. One entry per learning/meeting/document. If you have multiple learnings from one task, upsert each separately.
+This is fast (incremental) and ensures future `mcp:gbrain:query()` calls can find what you just wrote.
 
 ---
 
