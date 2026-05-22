@@ -129,7 +129,7 @@ Read the relevant `.md` file if it exists (e.g., `integrations/GWS.md` for Googl
 - Common commands and patterns
 - Skills or tools to use
 
-Also read `GBRAIN.md` for the gbrain knowledge layer — available commands, brain/ directory structure, and sync workflow.
+Also read `GBRAIN.md` for the gbrain knowledge layer — available commands, ~/brain/ directory structure, and sync workflow.
 
 ---
 
@@ -173,7 +173,7 @@ To use a skill: read `.claude/skills/<name>/SKILL.md` and follow its instruction
 | Reply to an email | `gws-gmail-reply` skill |
 | Forward an email | `gws-gmail-forward` skill |
 | Calendar operations | `gws-calendar` skill |
-| Store/recall knowledge | `mcp:gbrain:query()` to search, write to `brain/` directory + `gbrain sync --source franklin` to store (see Steps 1b and 3) |
+| Store/recall knowledge | `mcp:gbrain:query()` to search, write to `~/brain/` directory + `gbrain sync --source franklin` to store (see Steps 1b and 3) |
 | Monarch Money (accounts, budgets, transactions) | Use `mmoney` skill |
 
 If the task doesn't fit any pattern, figure it out. Combine tools and skills. Read more skill files if the names look relevant. You're autonomous — act like it.
@@ -303,9 +303,9 @@ The next worker will see the user's reply in its message context plus the conver
 
 ---
 
-## Step 3 — Store learnings to brain/
+## Step 3 — Store learnings to ~/brain/
 
-If the task produced something worth remembering for next time, write it as a markdown page to the `brain/` directory. Only store discrete, reusable knowledge — not routine task output.
+If the task produced something worth remembering for next time, write it as a markdown page to the `~/brain/` directory. Only store discrete, reusable knowledge — not routine task output.
 
 ### Where to file
 
@@ -313,14 +313,14 @@ Read `.claude/skills/repo-architecture/SKILL.md` for the full filing protocol, o
 
 | Directory | Purpose |
 |-----------|---------|
-| `brain/people/` | People — preferences, role, relationship context |
-| `brain/companies/` | Companies and organizations |
-| `brain/concepts/` | Ideas, patterns, architectural concepts |
-| `brain/projects/` | Active projects, decisions, status |
-| `brain/events/` | Meetings, calls, significant occurrences |
-| `brain/references/` | Tool guides, runbooks, external references |
-| `brain/reports/` | Timestamped reports and summaries |
-| `brain/originals/` | Raw transcripts, exact-phrasing content |
+| `~/brain/people/` | People — preferences, role, relationship context |
+| `~/brain/companies/` | Companies and organizations |
+| `~/brain/concepts/` | Ideas, patterns, architectural concepts |
+| `~/brain/projects/` | Active projects, decisions, status |
+| `~/brain/events/` | Meetings, calls, significant occurrences |
+| `~/brain/references/` | Tool guides, runbooks, external references |
+| `~/brain/reports/` | Timestamped reports and summaries |
+| `~/brain/originals/` | Raw transcripts, exact-phrasing content |
 
 ### What to store
 
@@ -338,7 +338,7 @@ Read `.claude/skills/repo-architecture/SKILL.md` for the full filing protocol, o
 
 ### Write format
 
-Write a markdown file to the appropriate `brain/` subdirectory. Use YAML frontmatter with `type`, `tags`, and `date`:
+Write a markdown file to the appropriate `~/brain/` subdirectory. Use YAML frontmatter with `type`, `tags`, and `date`:
 
 ```markdown
 ---
