@@ -285,12 +285,16 @@
   </header>
 
   <div class="modal-overlay" id="quest-modal" onclick="if(event.target===this)this.classList.remove('open')">
-    <div class="modal" style="max-width:600px">
+    <div class="modal" style="max-width:720px;width:720px">
       <div class="modal-head">
         <h2 id="quest-modal-title"></h2>
-        <button class="modal-close" onclick="document.getElementById('quest-modal').classList.remove('open')">&times;</button>
+        <span style="display:flex;align-items:center;gap:8px">
+          <button id="quest-modal-toggle" class="tag tag-blue" style="cursor:pointer;border:none;font-family:inherit" onclick="toggleQuestModalView()">Raw JSON</button>
+          <button class="modal-close" onclick="document.getElementById('quest-modal').classList.remove('open')">&times;</button>
+        </span>
       </div>
-      <pre id="quest-modal-body" style="font-size:11px;color:var(--text);overflow:auto;max-height:70vh;margin:0;padding:10px;background:var(--card);border-radius:6px;white-space:pre-wrap;word-break:break-word"></pre>
+      <div id="quest-modal-body"></div>
+      <pre id="quest-modal-raw" class="hidden" style="font-size:11px;color:var(--text);overflow:auto;max-height:70vh;margin:0;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;word-break:break-word"></pre>
     </div>
   </div>
 
@@ -331,10 +335,140 @@
       return `${Math.floor(s / 86400)}d ago`;
     }
 
-    function showQuestJson(raw) {
-      document.getElementById('quest-modal-title').textContent = raw.id ?? 'Quest';
-      document.getElementById('quest-modal-body').textContent = JSON.stringify(raw, null, 2);
+    const QUEST_STATUS_TAG = {
+      completed:   'tag-green',
+      failed:      'tag-red',
+      error:       'tag-red',
+      timeout:     'tag-red',
+      cancelled:   'tag-red',
+      in_progress: 'tag-blue',
+      running:     'tag-green',
+      pending:     'tag-yellow',
+    };
+
+    const ACTION_COLOR = {
+      note:          'var(--muted)',
+      message_sent:  'var(--cyan)',
+      info_received: 'var(--blue)',
+      decision:      'var(--purple)',
+      error:         'var(--red)',
+      escalation:    'var(--orange)',
+      completion:    'var(--green)',
+    };
+
+    function renderQuestDetail(q) {
+      const raw = q.raw ?? {};
+      const ctx = raw.context ?? {};
+      const source = raw.source ?? {};
+      const approach = Array.isArray(raw.approach) ? raw.approach : (Array.isArray(ctx.approach) ? ctx.approach : []);
+      const logs = q.recentLogs ?? [];
+      let out = '';
+
+      if (q.objective || raw.objective) {
+        out += `<div class="modal-section"><div class="modal-section-title">Objective</div>`;
+        out += `<div style="font-size:12px;color:var(--text);line-height:1.5">${esc(q.objective ?? raw.objective)}</div></div>`;
+      }
+
+      if (approach.length) {
+        out += `<div class="modal-section"><div class="modal-section-title">Approach</div>`;
+        out += `<ol style="font-size:12px;color:var(--text);padding-left:20px;line-height:1.5">`;
+        out += approach.map(s => `<li style="margin-bottom:4px">${esc(s)}</li>`).join('');
+        out += `</ol></div>`;
+      }
+
+      const sourceRows = [];
+      if (raw.requested_by) sourceRows.push(['Requested by', esc(raw.requested_by)]);
+      if (source.platform) sourceRows.push(['Platform', esc(source.platform)]);
+      if (source.task_id) sourceRows.push(['Source task', esc(source.task_id)]);
+      if (ctx.signal_id) sourceRows.push(['Signal', esc(ctx.signal_id)]);
+      if (ctx.channel_id) sourceRows.push(['Channel', esc(ctx.channel_id)]);
+      if (sourceRows.length) {
+        out += `<div class="modal-section"><div class="modal-section-title">Source</div>`;
+        out += sourceRows.map(([k, v]) =>
+          `<div class="modal-kv"><span class="modal-kv-label">${k}</span><span class="modal-kv-value">${v}</span></div>`
+        ).join('');
+        out += `</div>`;
+      }
+
+      const workerRows = [];
+      if (raw.sandbox_path) workerRows.push(['Sandbox', `<code style="font-size:11px">${esc(raw.sandbox_path)}</code>`]);
+      if (q.costUSD != null) workerRows.push(['Cost', `<span style="color:var(--yellow);font-weight:700">$${q.costUSD.toFixed(2)}</span>`]);
+      if (q.prUrl ?? raw.pr_url) {
+        const url = q.prUrl ?? raw.pr_url;
+        workerRows.push(['PR', `<a href="${esc(url)}" target="_blank">${esc(url)}</a>`]);
+      }
+      if (raw.agent_status) workerRows.push(['Agent status', esc(raw.agent_status)]);
+      if (workerRows.length) {
+        out += `<div class="modal-section"><div class="modal-section-title">Worker</div>`;
+        out += workerRows.map(([k, v]) =>
+          `<div class="modal-kv"><span class="modal-kv-label">${k}</span><span class="modal-kv-value">${v}</span></div>`
+        ).join('');
+        out += `</div>`;
+      }
+
+      if (raw.outcome) {
+        out += `<div class="modal-section"><div class="modal-section-title">Outcome</div>`;
+        out += `<div style="font-size:12px;color:var(--text);line-height:1.5;white-space:pre-wrap;word-break:break-word">${esc(raw.outcome)}</div></div>`;
+      }
+
+      if (logs.length) {
+        out += `<div class="modal-section"><div class="modal-section-title">Timeline <span class="tag tag-purple" style="margin-left:4px">${logs.length}</span></div>`;
+        out += `<div style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">`;
+        out += logs.map(e => {
+          const color = ACTION_COLOR[e.action] ?? 'var(--orange)';
+          return `
+            <div style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px;line-height:1.4">
+              <div style="display:flex;gap:8px;align-items:baseline">
+                <span style="color:var(--muted);white-space:nowrap;min-width:60px">${esc(e.ago)}</span>
+                <span style="color:${color};font-weight:600;white-space:nowrap">[${esc(e.action)}]</span>
+                <span style="color:var(--text);word-break:break-word">${esc(e.summary)}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+        out += `</div></div>`;
+      }
+
+      return out;
+    }
+
+    function setActiveTab(name) {
+      try { localStorage.setItem('franklin.activeTab', name); } catch { /* private mode */ }
+      document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name));
+    }
+
+    let _activeQuestForModal = null;
+
+    function showQuestDetail(q) {
+      _activeQuestForModal = q;
+      const raw = q.raw ?? q;
+      const statusCls = QUEST_STATUS_TAG[q.status ?? raw.status] ?? 'tag-blue';
+      const status = q.status ?? raw.status ?? '';
+      const category = q.category ?? raw.category;
+      document.getElementById('quest-modal-title').innerHTML =
+        `${esc(q.id ?? raw.id ?? 'Quest')} ${status ? `<span class="tag ${statusCls}" style="margin-left:8px">${esc(status)}</span>` : ''}${category ? ` <span class="tag tag-cyan" style="margin-left:4px">${esc(category)}</span>` : ''}`;
+      document.getElementById('quest-modal-body').innerHTML = renderQuestDetail(q);
+      document.getElementById('quest-modal-raw').textContent = JSON.stringify(raw, null, 2);
+      document.getElementById('quest-modal-body').classList.remove('hidden');
+      document.getElementById('quest-modal-raw').classList.add('hidden');
+      document.getElementById('quest-modal-toggle').textContent = 'Raw JSON';
       document.getElementById('quest-modal').classList.add('open');
+    }
+
+    function toggleQuestModalView() {
+      const body = document.getElementById('quest-modal-body');
+      const raw = document.getElementById('quest-modal-raw');
+      const btn = document.getElementById('quest-modal-toggle');
+      if (body.classList.contains('hidden')) {
+        body.classList.remove('hidden');
+        raw.classList.add('hidden');
+        btn.textContent = 'Raw JSON';
+      } else {
+        body.classList.add('hidden');
+        raw.classList.remove('hidden');
+        btn.textContent = 'Structured';
+      }
     }
 
     function showDeployModal(idx) {
@@ -473,13 +607,18 @@
     }
 
     function renderMain(d) {
-      // Active quests
-      window.__questRaw = [];
-      const questCards = d.activeQuests.map((q, i) => {
-        window.__questRaw.push(q.raw);
+      window.__quests = [];
+
+      // Active quest cards
+      const questCards = d.activeQuests.map((q) => {
+        window.__quests.push(q);
+        const qIdx = window.__quests.length - 1;
+        const isScheduled = q.raw?.requested_by === 'scheduled';
         const tags = [
           q.agentStatus === 'running' ? `<span class="tag tag-green">running</span>` : '',
           `<span class="tag tag-purple">${esc(q.status)}</span>`,
+          isScheduled ? `<span class="tag" style="color:var(--muted)" title="Triggered by schedule">⏱ scheduled</span>` : '',
+          q.category ? `<span class="tag tag-cyan" title="Quest category">${esc(q.category)}</span>` : '',
           q.prUrl ? `<a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '',
         ].filter(Boolean).join(' ');
 
@@ -491,12 +630,11 @@
           </div>
         `).join('');
 
-        const jsonIdx = window.__questRaw.length - 1;
         return `
-          <div class="quest-card">
+          <div class="quest-card" style="cursor:pointer" onclick="showQuestDetail(window.__quests[${qIdx}])">
             <div class="quest-head">
               <span><span class="quest-id">${esc(q.id)}</span> <span class="quest-age">${q.createdAgo}</span></span>
-              <span><span class="tag" style="cursor:pointer;font-size:11px" onclick="showQuestJson(window.__questRaw[${jsonIdx}])" title="View JSON">{ }</span> ${tags}</span>
+              <span>${tags}</span>
             </div>
             <div class="quest-obj">${esc(q.objective)}</div>
             ${logs ? `<div class="quest-logs">${logs}</div>` : ''}
@@ -504,19 +642,22 @@
         `;
       }).join('');
 
-      // Completed quests (collapsible)
+      // Completed quest cards
       const completedCards = (d.completedQuests ?? []).map(q => {
-        const jsonIdx = window.__questRaw.length;
-        window.__questRaw.push(q.raw);
+        window.__quests.push(q);
+        const qIdx = window.__quests.length - 1;
         const statusTag = q.status === 'completed'
           ? '<span class="tag tag-green">completed</span>'
           : `<span class="tag tag-red">${esc(q.status)}</span>`;
+        const isScheduled = q.raw?.requested_by === 'scheduled';
+        const categoryTag = q.category ? ` <span class="tag tag-cyan">${esc(q.category)}</span>` : '';
+        const scheduledTag = isScheduled ? ` <span class="tag" style="color:var(--muted)">⏱ scheduled</span>` : '';
         const prTag = q.prUrl ? ` <a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '';
         return `
-          <div class="quest-card-completed" style="cursor:pointer" onclick="this.querySelectorAll('.quest-detail').forEach(el=>el.classList.toggle('expanded'))">
+          <div class="quest-card-completed" style="cursor:pointer" onclick="showQuestDetail(window.__quests[${qIdx}])">
             <div class="quest-head">
               <span><span class="quest-id">${esc(q.id)}</span> <span class="quest-age">${q.updatedAgo}</span></span>
-              <span><span class="tag" style="cursor:pointer;font-size:11px" onclick="event.stopPropagation();showQuestJson(window.__questRaw[${jsonIdx}])" title="View JSON">{ }</span> ${statusTag}${prTag}</span>
+              <span>${statusTag}${scheduledTag}${categoryTag}${prTag}</span>
             </div>
             <div class="quest-detail"><span class="quest-detail-label">objective</span> ${esc(q.objective)}</div>
             ${q.outcome ? `<div class="quest-detail"><span class="quest-detail-label">outcome</span> ${esc(q.outcome)}</div>` : ''}
@@ -524,7 +665,45 @@
         `;
       }).join('');
 
-      // Recent dispatches
+      // DM replies tab
+      const dmReplyRows = (d.recentDmReplies ?? []).map(r => {
+        const cls = STATUS_TAG[r.status] ?? 'tag-blue';
+        return `
+          <div class="dispatch-row">
+            <div class="dispatch-header">
+              <span style="color:var(--muted);font-size:11px">${esc(r.task_id)}</span>
+              <span style="display:flex;align-items:center;gap:6px">
+                <span class="tag ${cls}">${esc(r.status)}</span>
+                <span style="color:var(--muted);font-size:11px">${esc(r.completedAgo)}</span>
+              </span>
+            </div>
+            ${r.summary ? `<div class="dispatch-summary">${esc(r.summary)}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      // Scheduled runs tab
+      const scheduledRunRows = (d.recentScheduledRuns ?? []).map(r => {
+        const cls = STATUS_TAG[r.status] ?? 'tag-blue';
+        const categoryTag = r.category
+          ? `<span class="tag tag-cyan" title="Category">${esc(r.category)}</span>`
+          : '';
+        return `
+          <div class="dispatch-row">
+            <div class="dispatch-header">
+              <span style="color:var(--muted);font-size:11px">${esc(r.task_id)}</span>
+              <span style="display:flex;align-items:center;gap:6px">
+                ${categoryTag}
+                <span class="tag ${cls}">${esc(r.status)}</span>
+                <span style="color:var(--muted);font-size:11px">${esc(r.completedAgo)}</span>
+              </span>
+            </div>
+            ${r.summary ? `<div class="dispatch-summary">${esc(r.summary)}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      // All dispatches tab
       const dispatchRows = (d.recentDispatches ?? []).slice(0, 15).map(r => {
         const cls = STATUS_TAG[r.status] ?? 'tag-blue';
         return `
@@ -544,25 +723,47 @@
         `;
       }).join('');
 
-      // Preserve completed-quests collapse state across refreshes
       const completedWasHidden = document.getElementById('completed-quests-list')?.classList.contains('hidden') ?? false;
+
+      let activeTab = 'quests';
+      try { activeTab = localStorage.getItem('franklin.activeTab') || 'quests'; } catch { /* private mode */ }
+      const TABS = [
+        { id: 'quests',     label: 'Quests',         count: d.activeQuests?.length ?? 0 },
+        { id: 'dm',         label: 'DM Replies',     count: d.recentDmReplies?.length ?? 0 },
+        { id: 'scheduled',  label: 'Scheduled Runs', count: d.recentScheduledRuns?.length ?? 0 },
+        { id: 'dispatches', label: 'Dispatches',     count: d.recentDispatches?.length ?? 0 },
+      ];
+      const tabBar = TABS.map(t => `
+        <button class="tab ${t.id === activeTab ? 'active' : ''}" data-tab="${t.id}" onclick="setActiveTab('${t.id}')">
+          ${t.label}${t.count > 0 ? ` <span class="tab-count">${t.count}</span>` : ''}
+        </button>
+      `).join('');
+
+      const panelHidden = (id) => id === activeTab ? '' : ' hidden';
 
       document.getElementById('col-main').innerHTML = `
         <div class="section">
-          <div class="section-title">Quests${d.activeQuests.length ? ` <span class="tag tag-green">${d.activeQuests.length} active</span>` : ''}</div>
-          ${questCards || '<div class="empty">No active quests</div>'}
-          ${completedCards ? `
-            <div class="quest-completed-section">
-              <div class="section-title quest-completed-toggle" onclick="document.getElementById('completed-quests-list').classList.toggle('hidden')">
-                <span style="font-size:11px">&#9660;</span> Recently Completed <span class="tag tag-purple">${d.completedQuests.length}</span>
+          <div class="tabs">${tabBar}</div>
+          <div id="tab-quests" class="tab-panel${panelHidden('quests')}">
+            ${questCards || '<div class="empty">No active quests</div>'}
+            ${completedCards ? `
+              <div class="quest-completed-section">
+                <div class="section-title quest-completed-toggle" onclick="document.getElementById('completed-quests-list').classList.toggle('hidden')">
+                  <span style="font-size:11px">&#9660;</span> Recently Completed <span class="tag tag-purple">${d.completedQuests.length}</span>
+                </div>
+                <div id="completed-quests-list"${completedWasHidden ? ' class="hidden"' : ''}>${completedCards}</div>
               </div>
-              <div id="completed-quests-list"${completedWasHidden ? ' class="hidden"' : ''}>${completedCards}</div>
-            </div>
-          ` : ''}
-        </div>
-        <div class="section">
-          <div class="section-title">Recent Dispatches</div>
-          ${dispatchRows || '<div class="empty">No recent dispatches</div>'}
+            ` : ''}
+          </div>
+          <div id="tab-dm" class="tab-panel${panelHidden('dm')}">
+            ${dmReplyRows || '<div class="empty">No recent DM replies</div>'}
+          </div>
+          <div id="tab-scheduled" class="tab-panel${panelHidden('scheduled')}">
+            ${scheduledRunRows || '<div class="empty">No scheduled runs yet</div>'}
+          </div>
+          <div id="tab-dispatches" class="tab-panel${panelHidden('dispatches')}">
+            ${dispatchRows || '<div class="empty">No recent dispatches</div>'}
+          </div>
         </div>
       `;
     }

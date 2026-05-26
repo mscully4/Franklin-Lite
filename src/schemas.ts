@@ -7,15 +7,37 @@
 
 import { z } from "zod";
 
+// ── QuestCategory ───────────────────────────────────────────────────────────
+
+export const QuestCategorySchema = z.enum([
+  // Scout-driven
+  "calendar_prep",
+  "email_triage",
+
+  // Scheduled
+  "maintenance",
+
+  // Brain picks for ad-hoc Discord pings
+  "user_question",
+  "user_task",
+  "research",
+
+  "other",
+]);
+
+export type QuestCategory = z.infer<typeof QuestCategorySchema>;
+
 // ── DelegationTask ──────────────────────────────────────────────────────────
 
 export const DelegationTaskSchema = z.object({
   id: z.string(),
   type: z.string(),
-  priority: z.string(),
+  priority: z.string().default("normal"),
   kind: z.enum(["worker", "script"]).optional(),
   command: z.string().optional(),
   timeout: z.number().optional(),
+  dedup_key: z.string(),
+  category: QuestCategorySchema.optional(),
   context: z.record(z.string(), z.any()),
   mark_surfaced: z
     .object({
@@ -51,6 +73,7 @@ export const ScheduledTaskSchema = z.object({
   command: z.string().optional(),
   timeout: z.number().optional(),
   display_description: z.string().optional(),
+  category: QuestCategorySchema.optional(),
   context: z.record(z.string(), z.any()),
   last_run: z.string().nullable().optional(),
   fail_count: z.number().optional(),

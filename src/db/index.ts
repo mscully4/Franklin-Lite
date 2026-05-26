@@ -29,10 +29,14 @@ const SCHEMA = `
     task_id         TEXT NOT NULL,
     type            TEXT NOT NULL,
     priority        TEXT NOT NULL,
+    dedup_key       TEXT NOT NULL DEFAULT '',
     dispatched_at   TEXT NOT NULL,
     completed_at    TEXT NOT NULL,
     status          TEXT NOT NULL,
-    summary         TEXT
+    summary         TEXT,
+    quest_id        TEXT,
+    category        TEXT,
+    cost_usd        REAL
   );
   CREATE INDEX IF NOT EXISTS dispatch_log_status    ON dispatch_log(status);
   CREATE INDEX IF NOT EXISTS dispatch_log_completed ON dispatch_log(completed_at);
@@ -50,6 +54,7 @@ const SCHEMA = `
     sandbox_path    TEXT,
     pr_url          TEXT,
     outcome         TEXT,
+    category        TEXT,
     agent_status    TEXT NOT NULL DEFAULT 'pending',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
@@ -132,6 +137,25 @@ function applyMigrations(db: InstanceType<typeof Database>): void {
   const runningCols = db.pragma("table_info(running_tasks)") as Array<{ name: string }>;
   if (!runningCols.some((c) => c.name === "assigned_ip")) {
     db.exec(`ALTER TABLE running_tasks ADD COLUMN assigned_ip TEXT`);
+  }
+
+  const dispatchCols = db.pragma("table_info(dispatch_log)") as Array<{ name: string }>;
+  if (!dispatchCols.some((c) => c.name === "dedup_key")) {
+    db.exec(`ALTER TABLE dispatch_log ADD COLUMN dedup_key TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!dispatchCols.some((c) => c.name === "quest_id")) {
+    db.exec(`ALTER TABLE dispatch_log ADD COLUMN quest_id TEXT`);
+  }
+  if (!dispatchCols.some((c) => c.name === "category")) {
+    db.exec(`ALTER TABLE dispatch_log ADD COLUMN category TEXT`);
+  }
+  if (!dispatchCols.some((c) => c.name === "cost_usd")) {
+    db.exec(`ALTER TABLE dispatch_log ADD COLUMN cost_usd REAL`);
+  }
+
+  const questCols = db.pragma("table_info(quests)") as Array<{ name: string }>;
+  if (!questCols.some((c) => c.name === "category")) {
+    db.exec(`ALTER TABLE quests ADD COLUMN category TEXT`);
   }
 
   // Deduplicate dispatch_log: keep only the latest row per task_id

@@ -77,6 +77,7 @@ app.get("/api/state", (_req, res) => {
       createdAgo: timeAgo(quest.created_at as string),
       agentStatus: quest.agent_status,
       prUrl: quest.pr_url ?? null,
+      category: quest.category ?? null,
       recentLogs,
       logCount: logs.length,
       raw: quest,
@@ -98,6 +99,7 @@ app.get("/api/state", (_req, res) => {
         updatedAgo: timeAgo(updatedAt),
         prUrl: (quest.pr_url as string) ?? null,
         status: quest.status,
+        category: quest.category ?? null,
         raw: quest,
       };
     })
@@ -142,6 +144,16 @@ app.get("/api/state", (_req, res) => {
     completedAgo: timeAgo(r.completed_at as string),
   }));
 
+  const recentDmReplies = db.getRecentDmReplies(15).map((r) => ({
+    ...r,
+    completedAgo: timeAgo(r.completed_at as string),
+  }));
+
+  const recentScheduledRuns = db.getRecentScheduledRuns(20).map((r) => ({
+    ...r,
+    completedAgo: timeAgo(r.completed_at as string),
+  }));
+
   // Scheduled tasks
   const scheduledTasks = (readJson<Array<{ id: string; every: string; kind?: string; display_description?: string; context: { objective?: string; skill?: string }; last_run?: string }>>(join(STATE, "scheduled_tasks.json")) ?? [])
     .map((t) => ({ id: t.id, every: t.every, kind: t.kind ?? "worker", description: t.display_description ?? t.context?.skill ?? t.id, lastRun: t.last_run ?? null, lastRunAgo: timeAgo(t.last_run ?? null) }));
@@ -156,6 +168,8 @@ app.get("/api/state", (_req, res) => {
     socketAgo: timeAgo(socketData?.updated_at ?? null),
     activeWorkers,
     recentDispatches,
+    recentDmReplies,
+    recentScheduledRuns,
     activeQuests,
     completedQuests,
     meetings,

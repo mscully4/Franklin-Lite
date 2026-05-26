@@ -44,7 +44,15 @@ export function makeTaskMethods(db: InstanceType<typeof Database>) {
     },
 
     getRecentDispatches(limit = 20): Array<Record<string, unknown>> {
-      return db.prepare(`SELECT * FROM dispatch_log ORDER BY id DESC LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
+      return db.prepare(`SELECT * FROM dispatch_log WHERE type != 'dm_reply' ORDER BY id DESC LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
+    },
+
+    getRecentDmReplies(limit = 15): Array<Record<string, unknown>> {
+      return db.prepare(`SELECT * FROM dispatch_log WHERE type = 'dm_reply' ORDER BY id DESC LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
+    },
+
+    getRecentScheduledRuns(limit = 20): Array<Record<string, unknown>> {
+      return db.prepare(`SELECT * FROM dispatch_log WHERE type = 'scheduled' AND quest_id IS NULL ORDER BY id DESC LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
     },
 
     pruneDispatchLog(days = 30): number {

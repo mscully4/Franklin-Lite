@@ -125,11 +125,10 @@ function recoverStaleQuests(): void {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/** Task types that get a persistent quest state file. */
-const QUEST_STATE_TYPES = new Set(["quest"]);
-
 function taskNeedsQuestState(task: DelegationTask): boolean {
-  return QUEST_STATE_TYPES.has(task.type);
+  if (task.type === "dm_reply") return false;  // conversational responder, no persistent state
+  if (task.kind === "script") return false;     // synchronous, no LLM
+  return true;
 }
 
 // ── Quest state file creation ───────────────────────────────────────────────
@@ -170,7 +169,7 @@ function createQuestState(task: DelegationTask, dispatchedAt: string): string {
     status: "active",
     objective: (ctx.objective as string) ?? "No objective specified",
     approach: (ctx.approach as string[]) ?? [],
-    requested_by: "franklin_brain",
+    requested_by: task.type,
     source_platform: "delegation",
     source_task_id: task.id,
     agent_status: "running",

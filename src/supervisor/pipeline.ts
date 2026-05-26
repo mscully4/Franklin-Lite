@@ -77,6 +77,7 @@ export function generateDmTasks(): DelegationTask[] {
       id: `dm-${event.event_ts}`,
       type: "dm_reply",
       priority: "high",
+      dedup_key: `dm:${event.channel}:${event.event_ts}`,
       context: {
         event_ts: event.event_ts,
         channel: event.channel,
@@ -183,6 +184,7 @@ export function generateScheduledTasks(): DelegationTask[] {
       }
     }
 
+    const slot = job.last_run ?? "epoch";
     tasks.push({
       id: `sched-${job.id}`,
       type: job.type ?? "scheduled",
@@ -190,6 +192,8 @@ export function generateScheduledTasks(): DelegationTask[] {
       kind: job.kind,
       command: job.command,
       timeout: job.timeout,
+      dedup_key: `sched:${job.id}:${slot}`,
+      category: job.category,
       context: { ...job.context, scheduled_task_id: job.id },
       mark_surfaced: null,
     });
