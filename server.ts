@@ -327,6 +327,17 @@ async function fetchDiscordToken(): Promise<string> {
         threadContext = [{ author: msg.author.username, text: msg.content, ts: msg.id }];
       }
     } else {
+      // If this is a reply, fetch the referenced message for context
+      if (msg.reference?.messageId) {
+        try {
+          const refMsg = await msg.channel.messages.fetch(msg.reference.messageId);
+          if (refMsg?.content) {
+            threadContext.push({ author: refMsg.author.username, text: refMsg.content, ts: refMsg.id });
+          }
+        } catch (err) {
+          log.warn(`[discord] failed to fetch referenced message ${msg.reference.messageId}: ${(err as Error).message}`);
+        }
+      }
       try {
         const thread = await msg.startThread({
           name: msg.content.slice(0, 100) || "Conversation",
@@ -336,7 +347,7 @@ async function fetchDiscordToken(): Promise<string> {
         log.error(`[discord] failed to create thread: ${(err as Error).message}`);
         threadId = msg.channelId;
       }
-      threadContext = [{ author: msg.author.username, text: msg.content, ts: msg.id }];
+      threadContext.push({ author: msg.author.username, text: msg.content, ts: msg.id });
     }
 
     const inboxFile = join(BRAIN_INPUT, "discord_inbox.json");

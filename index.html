@@ -652,10 +652,11 @@
         window.__quests.push(q);
         const qIdx = window.__quests.length - 1;
         const isScheduled = q.raw?.requested_by === 'scheduled';
+        const schedName = isScheduled ? (q.raw?.context?.scheduled_task_id ?? 'scheduled') : '';
         const tags = [
           q.agentStatus === 'running' ? `<span class="tag tag-green">running</span>` : '',
           `<span class="tag tag-purple">${esc(q.status)}</span>`,
-          isScheduled ? `<span class="tag" style="color:var(--muted)" title="Triggered by schedule">⏱ scheduled</span>` : '',
+          isScheduled ? `<span class="tag" style="color:var(--muted)" title="Scheduled task: ${esc(schedName)}">⏱ ${esc(schedName)}</span>` : '',
           q.category ? `<span class="tag tag-cyan" title="Quest category">${esc(q.category)}</span>` : '',
           q.prUrl ? `<a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '',
         ].filter(Boolean).join(' ');
@@ -688,8 +689,9 @@
           ? '<span class="tag tag-green">completed</span>'
           : `<span class="tag tag-red">${esc(q.status)}</span>`;
         const isScheduled = q.raw?.requested_by === 'scheduled';
+        const schedName2 = isScheduled ? (q.raw?.context?.scheduled_task_id ?? 'scheduled') : '';
         const categoryTag = q.category ? ` <span class="tag tag-cyan">${esc(q.category)}</span>` : '';
-        const scheduledTag = isScheduled ? ` <span class="tag" style="color:var(--muted)">⏱ scheduled</span>` : '';
+        const scheduledTag = isScheduled ? ` <span class="tag" style="color:var(--muted)" title="Scheduled task: ${esc(schedName2)}">⏱ ${esc(schedName2)}</span>` : '';
         const prTag = q.prUrl ? ` <a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '';
         return `
           <div class="quest-card-completed" style="cursor:pointer" onclick="showQuestDetail(window.__quests[${qIdx}])">
@@ -723,13 +725,14 @@
       // Scheduled runs tab
       const scheduledRunRows = (d.recentScheduledRuns ?? []).map(r => {
         const cls = STATUS_TAG[r.status] ?? 'tag-blue';
+        const schedTaskName = String(r.dedup_key ?? '').replace(/^sched:([^:]+).*$/, '$1') || String(r.task_id ?? '');
         const categoryTag = r.category
           ? `<span class="tag tag-cyan" title="Category">${esc(r.category)}</span>`
           : '';
         return `
           <div class="dispatch-row">
             <div class="dispatch-header">
-              <span style="color:var(--muted);font-size:11px">${esc(r.task_id)}</span>
+              <span style="color:var(--cyan);font-weight:600">${esc(schedTaskName)}</span>
               <span style="display:flex;align-items:center;gap:6px">
                 ${categoryTag}
                 <span class="tag ${cls}">${esc(r.status)}</span>

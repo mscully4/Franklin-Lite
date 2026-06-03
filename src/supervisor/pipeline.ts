@@ -242,7 +242,7 @@ function runScriptTask(task: DelegationTask): WorkerResult {
     };
     writeJson(join(WORKER_RESULTS_DIR, `${task.id}.json`), result);
     appendDispatchLog({
-      task_id: task.id, type: task.type, priority: task.priority,
+      task_id: task.id, type: task.type, priority: task.priority, dedup_key: task.dedup_key,
       dispatched_at: dispatchedAt, completed_at: result.completed_at,
       status: "error", summary: result.summary,
     });
@@ -279,7 +279,7 @@ function runScriptTask(task: DelegationTask): WorkerResult {
 
   writeJson(join(WORKER_RESULTS_DIR, `${task.id}.json`), result);
   appendDispatchLog({
-    task_id: task.id, type: task.type, priority: task.priority,
+    task_id: task.id, type: task.type, priority: task.priority, dedup_key: task.dedup_key,
     dispatched_at: dispatchedAt, completed_at: completedAt,
     status, summary: result.summary,
   });

@@ -9,5 +9,5 @@
   "authorized_users": [
     { "name": "your-name", "discord_user_id": "XXXXXXXXXXXXXXXXXX" }
   ],
-  "integrations": ["discord", "gws"]
+  "integrations": ["discord", "gws", {"name": "hassio", "description": "Home Assistant smart home CLI", "env": ["HASSIO_URL", "HASSIO_TOKEN"]}]
 }

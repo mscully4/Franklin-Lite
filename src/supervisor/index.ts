@@ -7,7 +7,7 @@ import type { DelegationTask, Delegation } from "../config.js";
 import { initTaskManager, reapTasks, writeInflightSignals } from "./task-manager.js";
 import { openDb } from "../db/index.js";
 import { checkLock, writeLock, deleteLock, readLock } from "./lock.js";
-import { readLastRun, writeLastRun, isScoutDue, runStartupChecks, runScout } from "./scouts.js";
+import { readLastRun, writeLastRun, isScoutDue, checkIntegrations, runScout } from "./scouts.js";
 import {
   appendDispatchLog, runBrain,
   generateDmTasks, generateScheduledTasks,
@@ -188,15 +188,7 @@ if (!checkLock()) {
 
 mkdirSync(join(ROOT, "state"), { recursive: true });
 
-const settings = readJson<{ disabled_scouts?: string[] }>(SETTINGS_FILE);
-const disabledScouts = new Set(settings?.disabled_scouts ?? []);
-const enabledScouts = Object.keys(SCOUT_INTERVALS_MS).filter((s) => {
-  if (cliOnlyScouts && !cliOnlyScouts.includes(s)) return false;
-  if (cliSkipScouts.has(s)) return false;
-  if (disabledScouts.has(s)) return false;
-  return true;
-});
-runStartupChecks(enabledScouts);
+checkIntegrations();
 
 initTaskManager(ROOT, appendDispatchLog);
 

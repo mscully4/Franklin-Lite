@@ -36,33 +36,52 @@ export function isScoutDue(name: string, lastRun: LastRun): boolean {
   return Date.now() - new Date(lastRanAt).getTime() >= intervalMs;
 }
 
-const HEALTH_PROBES: Record<string, { cmd: string; label: string }> = {
-  gmail:    { cmd: "which gws", label: "Gmail (gws CLI)" },
-  calendar: { cmd: "which gws", label: "Calendar (gws CLI)" },
-};
+type IntegrationEntry = string | { name: string; description?: string; env?: string[] };
 
-export function runStartupChecks(enabledScouts: string[]): void {
-  log.info("Running startup health checks...");
+function resolveIntegrationName(entry: IntegrationEntry): string {
+  return typeof entry === "string" ? entry : entry.name;
+}
+
+export function checkIntegrations(): void {
+  const settings = readJson<{ integrations?: IntegrationEntry[] }>(
+    join(ROOT, "state", "settings.json"),
+  );
+  const integrations = settings?.integrations;
+  if (!integrations?.length) return;
+
   const failures: string[] = [];
 
-  for (const scout of enabledScouts) {
-    const probe = HEALTH_PROBES[scout];
-    if (!probe) continue;
+  for (const entry of integrations) {
+    const name = resolveIntegrationName(entry);
+    if (name === "discord") continue; // transport, not a CLI
+
+    // Check CLI binary exists
     try {
-      execSync(probe.cmd, { cwd: ROOT, stdio: "ignore", timeout: 15_000 });
-      log.info(` ✓ ${probe.label}`);
+      execSync(`which ${name}`, { stdio: "ignore", timeout: 5_000 });
+      log.info(` ✓ ${name} CLI`);
     } catch {
-      log.error(` ✗ ${probe.label} — unreachable`);
-      failures.push(probe.label);
+      log.error(` ✗ ${name} CLI — not found on $PATH`);
+      failures.push(`${name} (CLI missing)`);
+      continue; // skip env checks if binary is missing
+    }
+
+    // Check required env vars
+    if (typeof entry !== "string" && entry.env) {
+      for (const v of entry.env) {
+        if (process.env[v]) {
+          log.info(` ✓ ${name}: ${v}`);
+        } else {
+          log.error(` ✗ ${name}: ${v} — not set`);
+          failures.push(`${name} (missing ${v})`);
+        }
+      }
     }
   }
 
   if (failures.length > 0) {
-    log.fatal(`Startup failed — unreachable: ${failures.join(", ")}`);
+    log.fatal(`Startup failed — integration issues: ${failures.join(", ")}`);
     process.exit(1);
   }
-
-  log.info("All health checks passed.");
 }
 
 export function runScout(name: string): void {

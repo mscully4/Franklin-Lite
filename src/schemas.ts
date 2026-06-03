@@ -102,7 +102,16 @@ export const SettingsSchema = z.object({
       discord_user_id: z.string(),
     }),
   ),
-  integrations: z.array(z.string()),
+  integrations: z.array(
+    z.union([
+      z.string(),
+      z.object({
+        name: z.string(),
+        description: z.string().optional(),
+        env: z.array(z.string()).optional(),
+      }),
+    ]),
+  ),
   disabled_scouts: z.array(z.string()).optional(),
   feature_flags: z.record(z.string(), z.unknown()).optional(),
 });

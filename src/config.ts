@@ -50,6 +50,7 @@ export interface DispatchLogEntry {
   task_id: string;
   type: string;
   priority: string;
+  dedup_key?: string;
   dispatched_at: string;
   completed_at: string;
   status: "ok" | "error" | "skipped" | "timeout" | "no_worker" | "needs_info";

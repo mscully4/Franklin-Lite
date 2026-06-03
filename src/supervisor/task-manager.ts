@@ -150,7 +150,7 @@ function createQuestState(task: DelegationTask, dispatchedAt: string): string {
     status: "active",
     created_at: dispatchedAt,
     updated_at: dispatchedAt,
-    requested_by: "franklin_brain",
+    requested_by: task.type,
     source: { platform: "delegation", task_id: task.id },
     objective: ctx.objective ?? "No objective specified",
     approach: ctx.approach ?? [],
@@ -184,6 +184,33 @@ function createQuestState(task: DelegationTask, dispatchedAt: string): string {
   return questId;
 }
 
+// ── Format integrations for worker prompt ────────────────────────────────────
+
+type Integration = string | { name: string; description?: string; env?: string[] };
+
+function formatIntegration(entry: Integration): string {
+  if (typeof entry === "string") return entry;
+  const desc = entry.description ? ` — ${entry.description}` : "";
+  const envs = entry.env?.length ? ` (env: ${entry.env.join(", ")})` : "";
+  return `${entry.name}${desc}${envs}`;
+}
+
+function formatIntegrations(): string {
+  try {
+    const settings = readJson<{ integrations?: Integration[] }>(join(ROOT, "state", "settings.json"));
+    const integrations = settings?.integrations;
+    if (!integrations?.length) return "";
+    const clis = integrations.filter(e => {
+      const name = typeof e === "string" ? e : e.name;
+      return name !== "discord"; // discord is the transport, not a CLI
+    });
+    if (!clis.length) return "";
+    return `\nAvailable CLIs: ${clis.map(formatIntegration).join(", ")}.`;
+  } catch {
+    return "";
+  }
+}
+
 // ── Spawn background task ───────────────────────────────────────────────────
 
 export function spawnBackgroundTask(task: DelegationTask): void {
@@ -207,13 +234,14 @@ export function spawnBackgroundTask(task: DelegationTask): void {
     quest_id: questId,
     dispatched_at: dispatchedAt,
     mark_surfaced: task.mark_surfaced ? JSON.stringify(task.mark_surfaced) : null,
-    context: JSON.stringify(task.context),
+    context: JSON.stringify({ ...task.context, _dedup_key: task.dedup_key }),
   });
   taskDb.close();
 
   // Build prompt
   const questRef = questId ? ` Quest state: ${ROOT}/state/quests/active/${questId}.json` : "";
-  const promptArg = `Franklin codebase: ${ROOT}. Read ${ROOT}/prompts/worker_wrapper.md and execute. The task ID is ${task.id}.${questRef}`;
+  const integrationsStr = formatIntegrations();
+  const promptArg = `Franklin codebase: ${ROOT}. Read ${ROOT}/prompts/worker_wrapper.md and execute. The task ID is ${task.id}.${questRef}${integrationsStr}`;
 
   // Spawn claude process
   const child = spawn("claude",
@@ -247,6 +275,7 @@ export function spawnBackgroundTask(task: DelegationTask): void {
     task_id: task.id,
     type: task.type,
     priority: task.priority,
+    dedup_key: task.dedup_key,
     dispatched_at: dispatchedAt,
     completed_at: dispatchedAt,
     status: "ok",
@@ -332,10 +361,12 @@ function finalizeTask(
   }
 
   // 4. Dispatch log (final result)
+  const dedupKey = (() => { try { return JSON.parse(taskRow.context)._dedup_key; } catch { return undefined; } })();
   logDispatch({
     task_id: taskRow.task_id,
     type: taskRow.type,
     priority: taskRow.priority,
+    dedup_key: dedupKey,
     dispatched_at: taskRow.dispatched_at,
     completed_at: result.completed_at,
     status: result.status === "ok" ? "ok" : "error",

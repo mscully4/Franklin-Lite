@@ -8,19 +8,20 @@ export function makeTaskMethods(db: InstanceType<typeof Database>) {
       task_id: string;
       type: string;
       priority: string;
+      dedup_key?: string;
       dispatched_at: string;
       completed_at: string;
       status: string;
       summary: string | null;
     }): void {
       db.prepare(`
-        INSERT INTO dispatch_log (task_id, type, priority, dispatched_at, completed_at, status, summary)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO dispatch_log (task_id, type, priority, dedup_key, dispatched_at, completed_at, status, summary)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
           completed_at = excluded.completed_at,
           status = excluded.status,
           summary = excluded.summary
-      `).run(entry.task_id, entry.type, entry.priority, entry.dispatched_at, entry.completed_at, entry.status, entry.summary);
+      `).run(entry.task_id, entry.type, entry.priority, entry.dedup_key ?? "", entry.dispatched_at, entry.completed_at, entry.status, entry.summary);
     },
 
     lastTaskId(): string | null {
@@ -52,7 +53,7 @@ export function makeTaskMethods(db: InstanceType<typeof Database>) {
     },
 
     getRecentScheduledRuns(limit = 20): Array<Record<string, unknown>> {
-      return db.prepare(`SELECT * FROM dispatch_log WHERE type = 'scheduled' AND quest_id IS NULL ORDER BY id DESC LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
+      return db.prepare(`SELECT * FROM dispatch_log WHERE type = 'scheduled' ORDER BY id DESC LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
     },
 
     pruneDispatchLog(days = 30): number {

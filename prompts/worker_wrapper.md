@@ -118,16 +118,11 @@ If your task context includes a `playbook` field, read `playbooks/<playbook>` an
 
 ## Step 1e — Integration guides
 
-If your task involves working with an external service (Monarch Money, Google Workspace, etc.), check `integrations/` for a guide:
-```bash
-ls integrations/
-```
+You were given a list of available CLIs in the launch prompt. Each is on `$PATH` and pre-authenticated.
 
-Read the relevant `.md` file if it exists (e.g., `integrations/GWS.md` for Google Workspace tasks). These guides cover:
-- What data the integration monitors
-- Allowed operations and read-only rules
-- Common commands and patterns
-- Skills or tools to use
+**Check `integrations/` first** (`ls integrations/`) — many CLIs have a guide covering discovery workflow, key commands, and safety rules. Read the guide before using the CLI.
+
+If there's no guide, run `<name> --help` to discover commands. Don't guess.
 
 Also read `GBRAIN.md` for the gbrain knowledge layer — available commands, ~/brain/ directory structure, and sync workflow.
 
@@ -176,7 +171,8 @@ To use a skill: read `.claude/skills/<name>/SKILL.md` and follow its instruction
 | Calendar operations | `gws-calendar` skill |
 | Store/recall knowledge | `mcp:gbrain:query()` to search, write to `~/brain/` directory + `gbrain sync --source franklin` to store (see Steps 1b and 3) |
 | Monarch Money (accounts, budgets, transactions) | Use `mmoney` skill |
-| Browser automation (scrape sites, fill forms, screenshots, Electron apps) | Use `mscully:agent-browser` skill — read `integrations/agent-browser.md` first |
+| Browser automation (scrape sites, fill forms, screenshots, Electron apps) | Use `agent-browser` CLI — read `integrations/agent-browser.md` first |
+| Home Assistant (smart home: lights, switches, sensors, climate, etc.) | Use `hassio` CLI — read `integrations/hassio.md` first |
 
 If the task doesn't fit any pattern, figure it out. Combine tools and skills. Read more skill files if the names look relevant. You're autonomous — act like it.
 
