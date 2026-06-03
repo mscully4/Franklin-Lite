@@ -24,7 +24,10 @@ Compute total monthly recurring: sum all `stream.amount` where `stream.frequency
 Send to Discord:
 
 ```bash
-npx tsx src/actions/discord-send.ts message --channel_id <channel_id> --text "<report>"
+cat > /tmp/discord-msg.txt << 'EOF'
+<report>
+EOF
+npx tsx src/actions/discord-send.ts message --channel_id <channel_id> --file /tmp/discord-msg.txt
 ```
 
 Format:

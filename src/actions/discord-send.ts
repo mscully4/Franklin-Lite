@@ -4,9 +4,21 @@
  *
  * Usage:
  *   npx tsx src/actions/discord-send.ts message --channel_id 123456789012345678 --text "hello"
+ *   npx tsx src/actions/discord-send.ts message --channel_id ... --file /tmp/msg.txt
+ *   npx tsx src/actions/discord-send.ts message --channel_id ... --stdin
  *   npx tsx src/actions/discord-send.ts message --user_id 475783212891897857 --text "hello"
+ *
+ * Prefer --file or --stdin when the message contains $, backticks, or other
+ * shell-special characters. With --file, use a heredoc with quoted delimiter
+ * to prevent shell expansion:
+ *
+ *   cat > /tmp/discord-msg.txt << 'EOF'
+ *   Message with $dollars and `backticks` goes here
+ *   EOF
+ *   npx tsx src/actions/discord-send.ts message --channel_id ... --file /tmp/discord-msg.txt
  */
 
+import { readFileSync } from "fs";
 import { REST, Routes } from "discord.js";
 import { createLogger } from "../logger.js";
 const log = createLogger("discord");
@@ -31,12 +43,26 @@ function parseArgs(args: string[]): Record<string, string> {
 const [, , command, ...rest] = process.argv;
 const args = parseArgs(rest);
 
+function getMessageText(args: Record<string, string>): string {
+  if (args.text) return args.text;
+  if (args.file) return readFileSync(args.file, "utf-8").trimEnd();
+  if ("stdin" in args) {
+    return readFileSync("/dev/stdin", "utf-8").trimEnd();
+  }
+  return "";
+}
+
 async function main() {
   if (command === "message") {
-    if (!args.text) {
-      log.error("Usage: discord_send.ts message --channel_id <id> --text <text>  OR  --user_id <id> --text <text>");
+    const text = getMessageText(args);
+    if (!text) {
+      log.error("Usage: discord_send.ts message --channel_id <id> (--text <text> | --file <path> | --stdin)");
+      log.error("  --text   inline text (beware: $ and backticks get shell-expanded in double quotes)");
+      log.error("  --file   read message from file (safe — use with heredoc 'EOF')");
+      log.error("  --stdin  read message from stdin (safe — pipe or redirect)");
       process.exit(1);
     }
+
     const token = getDiscordToken();
     const rest = new REST().setToken(token);
 
@@ -53,7 +79,7 @@ async function main() {
     }
 
     const data = await rest.post(Routes.channelMessages(channelId), {
-      body: { content: args.text },
+      body: { content: text },
     }) as { id: string };
     console.log(JSON.stringify({ ok: true, message_id: data.id }));
   } else {

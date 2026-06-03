@@ -198,9 +198,12 @@ Read the file first, make the edit, confirm to the user what you changed. For co
 
 When messaging the user (Discord DMs, thread replies):
 - Read `settings.json` → `user_profile.tone` and write in that voice.
-- **Send as the Franklin bot** using the send script:
+- **Send as the Franklin bot** using the send script. Always use `--file` with a heredoc — NEVER pass the message inline with `--text`. Dollar signs, backticks, and other characters get mangled by the shell when passed via `--text`.
   ```bash
-  npx tsx src/actions/discord-send.ts message --channel_id <channel_id> --text "<message>"
+  cat > /tmp/discord-msg.txt << 'EOF'
+  <message — safe to include $dollars, `backticks`, etc.>
+  EOF
+  npx tsx src/actions/discord-send.ts message --channel_id <channel_id> --file /tmp/discord-msg.txt
   ```
   - `channel_id`: from task context `channel` field (Discord thread or channel ID)
 Only message the user when the task requires it (replies, alerts, notifications). Background tasks write their result to disk silently.

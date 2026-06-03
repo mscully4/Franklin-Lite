@@ -31,7 +31,10 @@ Look for:
 Send findings to Discord:
 
 ```bash
-npx tsx src/actions/discord-send.ts message --channel_id <channel_id> --text "<report>"
+cat > /tmp/discord-msg.txt << 'EOF'
+<report>
+EOF
+npx tsx src/actions/discord-send.ts message --channel_id <channel_id> --file /tmp/discord-msg.txt
 ```
 
 Format:
