@@ -43,7 +43,6 @@
     header h1 img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); }
     #header-metrics { display: flex; align-items: center; gap: 16px; }
     .hm { display: flex; align-items: center; gap: 4px; font-size: 12px; }
-    .hm-emoji { font-size: 14px; }
     .hm-val { font-weight: 700; }
     .hm-week { color: var(--muted); font-size: 10px; }
     #refresh { font-size: 11px; color: var(--muted); }
@@ -312,12 +311,18 @@
   <header>
     <h1><img src="/avatar.png" alt="Franklin">Franklin</h1>
     <div id="header-metrics"></div>
-    <div class="hm" title="DeepSeek account balance" style="font-size:12px">
-      <span class="hm-emoji">💰</span>
-      <span class="hm-val" id="deepseek-balance" style="color:var(--yellow)">…</span>
-    </div>
     <div id="refresh">loading...</div>
   </header>
+
+  <div class="modal-overlay" id="usage-modal" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal" style="max-width:640px">
+      <div class="modal-head">
+        <h2>Token Usage</h2>
+        <button class="modal-close" onclick="document.getElementById('usage-modal').classList.remove('open')">&times;</button>
+      </div>
+      <div id="usage-modal-body"></div>
+    </div>
+  </div>
 
   <div class="modal-overlay" id="quest-modal" onclick="if(event.target===this)this.classList.remove('open')">
     <div class="modal" style="max-width:720px;width:720px">
@@ -589,38 +594,6 @@
         </div>
       `).join('');
 
-      // Scheduled tasks — preserve expanded state across refreshes
-      const expandedTasks = new Set(
-        document.querySelectorAll('.sched-detail:not(.hidden)')
-      );
-      const expandedIds = new Set();
-      expandedTasks.forEach(el => {
-        const row = el.closest('.side-row');
-        if (row) expandedIds.add(row.dataset.taskId);
-      });
-
-      const scheduledRows = (d.scheduledTasks ?? []).map(t => {
-        const kindTag = t.kind === 'script'
-          ? '<span title="script">⚡</span>'
-          : '<span title="worker">🧠</span>';
-        const trippedTag = (t.failCount ?? 0) >= 3
-          ? ' <span class="tag tag-red" title="Circuit breaker tripped after 3 consecutive failures. Reset fail_count to 0 to re-enable.">tripped</span>'
-          : '';
-        const detailClass = expandedIds.has(t.id) ? 'sched-detail' : 'sched-detail hidden';
-        return `
-          <div class="side-row" data-task-id="${esc(t.id)}" style="cursor:pointer" onclick="this.querySelector('.sched-detail').classList.toggle('hidden')">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="color:var(--cyan);font-weight:600">${esc(t.id)}${trippedTag}</span>
-              <span style="display:flex;gap:4px">${kindTag}<span class="tag tag-purple">${esc(t.every)}</span></span>
-            </div>
-            <div class="${detailClass}">
-              <div class="side-muted">${esc(t.description)}</div>
-              <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
-            </div>
-          </div>
-        `;
-      }).join('');
-
       document.getElementById('col-left').innerHTML = `
         <div class="section">
           <div class="section-title">Process</div>
@@ -637,10 +610,6 @@
           <div class="section-title">Scouts</div>
           ${scouts}
         </div>
-        <div class="section">
-          <div class="section-title">Scheduled Tasks</div>
-          ${scheduledRows || '<div class="empty">None configured</div>'}
-        </div>
       `;
     }
 
@@ -653,12 +622,15 @@
         const qIdx = window.__quests.length - 1;
         const isScheduled = q.raw?.requested_by === 'scheduled';
         const schedName = isScheduled ? (q.raw?.context?.scheduled_task_id ?? 'scheduled') : '';
+        const modelShort = q.workerModel ? q.workerModel.replace(/^claude-/, '') : null;
         const tags = [
           q.agentStatus === 'running' ? `<span class="tag tag-green">running</span>` : '',
           `<span class="tag tag-purple">${esc(q.status)}</span>`,
           isScheduled ? `<span class="tag" style="color:var(--muted)" title="Scheduled task: ${esc(schedName)}">⏱ ${esc(schedName)}</span>` : '',
           q.category ? `<span class="tag tag-cyan" title="Quest category">${esc(q.category)}</span>` : '',
           q.prUrl ? `<a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '',
+          q.costUSD != null ? `<span class="tag tag-yellow" title="Total cost for this quest">$${q.costUSD.toFixed(2)}</span>` : '',
+          modelShort ? `<span class="tag" style="color:var(--muted)" title="Worker model">${esc(modelShort)}</span>` : '',
         ].filter(Boolean).join(' ');
 
         const logs = q.recentLogs.map(l => `
@@ -693,11 +665,13 @@
         const categoryTag = q.category ? ` <span class="tag tag-cyan">${esc(q.category)}</span>` : '';
         const scheduledTag = isScheduled ? ` <span class="tag" style="color:var(--muted)" title="Scheduled task: ${esc(schedName2)}">⏱ ${esc(schedName2)}</span>` : '';
         const prTag = q.prUrl ? ` <a href="${esc(q.prUrl)}" target="_blank" class="tag tag-blue">PR</a>` : '';
+        const costTag = q.costUSD != null ? ` <span class="tag tag-yellow" title="Total cost for this quest">$${q.costUSD.toFixed(2)}</span>` : '';
+        const modelTag = q.workerModel ? ` <span class="tag" style="color:var(--muted)" title="Worker model">${esc(q.workerModel.replace(/^claude-/, ''))}</span>` : '';
         return `
           <div class="quest-card-completed" style="cursor:pointer" onclick="showQuestDetail(window.__quests[${qIdx}])">
             <div class="quest-head">
               <span><span class="quest-id">${esc(q.id)}</span> <span class="quest-age">${q.updatedAgo}</span></span>
-              <span>${statusTag}${scheduledTag}${categoryTag}${prTag}</span>
+              <span>${statusTag}${scheduledTag}${categoryTag}${prTag}${costTag}${modelTag}</span>
             </div>
             <div class="quest-detail"><span class="quest-detail-label">objective</span> ${esc(q.objective)}</div>
             ${q.outcome ? `<div class="quest-detail"><span class="quest-detail-label">outcome</span> ${esc(q.outcome)}</div>` : ''}
@@ -846,108 +820,44 @@
     }
 
     function renderRight(d) {
-      // Meetings
-      const meetings = (d.meetings ?? []).map(m => {
-        const start = new Date(m.start);
-        const end = new Date(m.end);
-        const now = Date.now();
-        const inProgress = now >= start.getTime() && now <= end.getTime();
-        const time = start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        const transcriptTag = m.transcript_available ? ' <span class="tag tag-cyan">transcript</span>' : '';
-        const statusTag = inProgress
-          ? '<span class="tag tag-green" style="margin-left:6px">now</span>'
-          : m.notified ? ' <span class="tag tag-green">notified</span>' : '';
-        const titleHtml = m.meetingUrl
-          ? `<a href="${esc(m.meetingUrl)}" target="_blank">${esc(m.title)}</a>`
-          : esc(m.title);
-        return `
-          <div class="side-row">
-            <span style="color:var(--yellow);font-weight:600;margin-right:8px;white-space:nowrap">${time}</span> ${titleHtml}${statusTag}${transcriptTag}
-            ${m.location && !m.meetingUrl ? `<div class="side-muted">${esc(m.location)}</div>` : ''}
-          </div>
-        `;
-      }).join('');
+      // Scheduled tasks — preserve expanded state across refreshes
+      const expandedTasks = new Set(
+        document.querySelectorAll('.sched-detail:not(.hidden)')
+      );
+      const expandedIds = new Set();
+      expandedTasks.forEach(el => {
+        const row = el.closest('.side-row');
+        if (row) expandedIds.add(row.dataset.taskId);
+      });
 
-      // Open PRs
-      const PR_STATUS = {
-        ok:                 { icon: '✅', cls: 'tag-green' },
-        ci_failing:         { icon: '🔴', cls: 'tag-red' },
-        conflict:           { icon: '💥', cls: 'tag-red' },
-        behind:             { icon: '⏳', cls: 'tag-yellow' },
-        changes_requested:  { icon: '🔄', cls: 'tag-orange' },
-        ready:              { icon: '🚀', cls: 'tag-green' },
-        'awaiting review':  { icon: '👀', cls: 'tag-purple' },
-      };
-      const inflightSet = new Set(d.inflightPrs ?? []);
-      const claimedSet = new Set(d.claimedPrs ?? []);
-      const prRows = (d.openPrs ?? []).map(pr => {
-        const s = PR_STATUS[pr.status] ?? { icon: '❓', cls: 'tag-blue' };
-        const signalId = `github:pr:crcl-main/${pr.repo}/${pr.number}`;
-        const working = inflightSet.has(signalId) ? ' 🦝' : '';
-        const approved = pr.approved ? ' ✓' : '';
-        const claimed = claimedSet.has(signalId);
-        const claimBtn = `<button onclick="toggleClaim('${signalId}', ${claimed})" class="claim-btn ${claimed ? 'claimed' : 'unclaimed'}" title="${claimed ? 'Release — let Franklin handle' : 'Claim — I\'ll handle this'}">${claimed ? 'claimed' : 'claim'}</button>`;
+      const scheduledRows = (d.scheduledTasks ?? []).map(t => {
+        const kindTag = t.kind === 'script'
+          ? '<span title="script">⚡</span>'
+          : '<span title="worker">🧠</span>';
+        const trippedTag = (t.failCount ?? 0) >= 3
+          ? ' <span class="tag tag-red" title="Circuit breaker tripped after 3 consecutive failures. Reset fail_count to 0 to re-enable.">tripped</span>'
+          : '';
+        const detailClass = expandedIds.has(t.id) ? 'sched-detail' : 'sched-detail hidden';
         return `
-          <div class="side-row" style="font-size:11px${claimed ? ';opacity:0.5' : ''}">
+          <div class="side-row" data-task-id="${esc(t.id)}" style="cursor:pointer" onclick="this.querySelector('.sched-detail').classList.toggle('hidden')">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <span><span title="${esc(pr.status)}">${s.icon}</span> <a href="${esc(pr.url)}" target="_blank" style="color:var(--blue)">${esc(pr.repo)}#${pr.number}</a></span>
-              <span style="color:var(--muted)">${approved}${working}${claimBtn}</span>
+              <span style="color:var(--cyan);font-weight:600">${esc(t.id)}${trippedTag}</span>
+              <span style="display:flex;gap:4px">${kindTag}<span class="tag tag-purple">${esc(t.every)}</span></span>
+            </div>
+            <div class="${detailClass}">
+              <div class="side-muted">${esc(t.description)}</div>
+              <div class="side-muted">last run: ${esc(t.lastRunAgo)}</div>
             </div>
           </div>
         `;
       }).join('');
 
-      // Review requests
-      const reviewRows = (d.reviewRequests ?? []).map(rr => {
-        const statusTag = rr.reviewedByMe
-          ? '<span class="tag tag-green">reviewed</span>'
-          : '<span class="tag tag-yellow">pending</span>';
-        return `
-          <div class="side-row" style="font-size:11px">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span><a href="${esc(rr.url)}" target="_blank" style="color:var(--blue)">${esc(rr.repo)}#${rr.number}</a></span>
-              ${statusTag}
-            </div>
-            <div class="side-muted">${esc(rr.author)} &middot; ${esc(rr.updatedAgo)}</div>
-          </div>
-        `;
-      }).join('');
-
-      // Deploys
-      const DEPLOY_STATUS = {
-        pending:  { icon: '🔶', cls: 'tag-yellow' },
-        approved: { icon: '✅', cls: 'tag-green' },
-      };
       window.__deploys = d.deploys ?? [];
-      const deployRows = (d.deploys ?? []).map((dep, i) => {
-        const s = DEPLOY_STATUS[dep.status] ?? DEPLOY_STATUS.pending;
-        return `
-          <div class="side-row" style="font-size:11px;cursor:pointer" onclick="showDeployModal(${i})">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span>${s.icon} ${esc(dep.service)}</span>
-              <span class="tag ${s.cls}">${esc(dep.status ?? 'pending')}</span>
-            </div>
-            <div class="side-muted">${esc(dep.requester ?? '')} &middot; ${esc(dep.createdAgo)}</div>
-          </div>
-        `;
-      }).join('');
 
       document.getElementById('col-right').innerHTML = `
         <div class="section">
-          <div class="section-title">Meetings</div>
-          ${meetings || '<div class="empty">None upcoming</div>'}
-        </div>
-        <div class="section">
-          <div class="section-title">Open PRs${d.openPrs?.length ? ` <span class="tag tag-blue">${d.openPrs.length}</span>` : ''}</div>
-          ${prRows || '<div class="empty">No open PRs</div>'}
-        </div>
-        <div class="section">
-          <div class="section-title">Reviews${d.reviewRequests?.length ? ` <span class="tag tag-blue">${d.reviewRequests.length}</span>` : ''}</div>
-          ${reviewRows || '<div class="empty">None pending</div>'}
-        </div>
-        <div class="section">
-          <div class="section-title">Deploys${d.deploys?.length ? ` <span class="tag tag-blue">${d.deploys.length}</span>` : ''}</div>
-          ${deployRows || '<div class="empty">None recent</div>'}
+          <div class="section-title">Scheduled Tasks</div>
+          ${scheduledRows || '<div class="empty">None configured</div>'}
         </div>
       `;
     }
@@ -971,6 +881,7 @@
       if (e.key === 'Escape') {
         document.getElementById('deploy-modal').classList.remove('open');
         document.getElementById('quest-modal').classList.remove('open');
+        document.getElementById('usage-modal').classList.remove('open');
       }
     });
 
@@ -984,6 +895,81 @@
       } catch {}
     }
 
+    function fmtTokens(n) {
+      if (!n) return '0';
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000) return (n / 1_000).toFixed(0) + 'K';
+      return String(n);
+    }
+
+    function renderUsageTable(periodData) {
+      if (!periodData?.tokenUsage) return '<div class="empty">No data</div>';
+      const models = Object.entries(periodData.tokenUsage)
+        .sort((a, b) => b[1].costUSD - a[1].costUSD);
+      if (!models.length) return '<div class="empty">No data</div>';
+      const rows = models.map(([model, u]) => `
+        <tr>
+          <td style="color:var(--blue);white-space:nowrap">${esc(model)}</td>
+          <td style="text-align:right;color:var(--muted)">${u.tasks}</td>
+          <td style="text-align:right">${fmtTokens(u.inputTokens)}</td>
+          <td style="text-align:right">${fmtTokens(u.outputTokens)}</td>
+          <td style="text-align:right;color:var(--muted)">${fmtTokens(u.cacheReadInputTokens)}</td>
+          <td style="text-align:right;color:var(--yellow);font-weight:600">$${u.costUSD.toFixed(2)}</td>
+        </tr>
+      `).join('');
+      const total = periodData.totalCostUSD ?? 0;
+      return `
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead>
+            <tr style="color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:0.5px">
+              <th style="text-align:left;padding:4px 0;border-bottom:1px solid var(--border)">Model</th>
+              <th style="text-align:right;padding:4px 0;border-bottom:1px solid var(--border)">Tasks</th>
+              <th style="text-align:right;padding:4px 0;border-bottom:1px solid var(--border)">Input</th>
+              <th style="text-align:right;padding:4px 0;border-bottom:1px solid var(--border)">Output</th>
+              <th style="text-align:right;padding:4px 0;border-bottom:1px solid var(--border)">Cache Read</th>
+              <th style="text-align:right;padding:4px 0;border-bottom:1px solid var(--border)">Cost</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr style="border-top:1px solid var(--border)">
+              <td colspan="5" style="padding:4px 0;color:var(--muted)">Total</td>
+              <td style="text-align:right;padding:4px 0;color:var(--yellow);font-weight:700">$${total.toFixed(2)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      `;
+    }
+
+    function openUsageModal() {
+      if (!metricsCache) return;
+      const periods = [
+        { key: 'today', label: 'Today' },
+        { key: 'week',  label: 'This Week' },
+        { key: 'month', label: 'This Month' },
+        { key: 'all',   label: 'All Time' },
+      ];
+      const body = periods.map(p => {
+        const data = metricsCache.periods[p.key];
+        const brain = data?.brain;
+        const brainRow = (brain && brain.invocations > 0) ? `
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;margin-bottom:4px;color:var(--muted)">
+            <span>🧠 Brain &middot; ${brain.invocations} invocation${brain.invocations === 1 ? '' : 's'}</span>
+            <span style="color:var(--yellow);font-weight:700">$${brain.costUSD.toFixed(2)}</span>
+          </div>
+        ` : '';
+        return `
+          <div class="modal-section">
+            <div class="modal-section-title">${p.label}</div>
+            ${brainRow}
+            ${renderUsageTable(data)}
+          </div>
+        `;
+      }).join('');
+      document.getElementById('usage-modal-body').innerHTML = body;
+      document.getElementById('usage-modal').classList.add('open');
+    }
+
     function renderHeaderMetrics() {
       const el = document.getElementById('header-metrics');
       if (!metricsCache) { el.innerHTML = ''; return; }
@@ -991,45 +977,23 @@
       const week = metricsCache.periods.week;
       if (!all) { el.innerHTML = ''; return; }
 
-      const items = [
-        { emoji: '✅', label: 'Tasks completed', val: all.tasks, weekVal: week?.tasks, color: 'var(--green)' },
-        { emoji: '🗡️', label: 'Quests completed', val: all.quests, weekVal: week?.quests, color: 'var(--purple)' },
-        { emoji: '💬', label: 'Messages sent', val: all.messagesSent, weekVal: week?.messagesSent, color: 'var(--cyan)' },
-        { emoji: '🚀', label: 'Deploys reviewed', val: all.deploys, weekVal: week?.deploys, color: 'var(--blue)' },
-      ];
+      const weekCost = week?.totalCostUSD ?? 0;
+      const allCost = all.totalCostUSD ?? 0;
+      const costTip = `$${allCost.toFixed(2)} total · $${weekCost.toFixed(2)} this week — click for breakdown`;
 
-      el.innerHTML = items.map(m => {
-        const tip = `${m.label}: ${m.val} total` + (m.weekVal ? `, ${m.weekVal} this week` : '');
-        return `
-          <div class="hm" title="${tip}">
-            <span class="hm-emoji">${m.emoji}</span>
-            <span class="hm-val" style="color:${m.color}">${m.val}</span>
-          </div>
-        `;
-      }).join('');
-    }
-
-    async function fetchDeepSeekBalance() {
-      try {
-        const data = await fetch('/api/deepseek-balance').then(r => r.json());
-        const info = data.balance_infos?.[0];
-        const el = document.getElementById('deepseek-balance');
-        if (!el) return;
-        if (info) {
-          el.textContent = `$${parseFloat(info.total_balance).toFixed(2)}`;
-          el.title = `DeepSeek balance: $${info.total_balance} USD`;
-        } else {
-          el.textContent = 'err';
-        }
-      } catch {}
+      el.innerHTML = `
+        <div class="hm" title="${costTip}" onclick="openUsageModal()" style="cursor:pointer">
+          <span class="hm-val" style="color:var(--yellow)">$${weekCost.toFixed(2)}</span>
+          <span class="hm-week">/ wk</span>
+          <a href="/costs" title="Open cost dashboard" style="color:var(--yellow);margin-left:8px;font-size:11px;text-decoration:none;border:1px solid var(--yellow);border-radius:3px;padding:1px 5px;opacity:0.7" onclick="event.stopPropagation()">costs →</a>
+        </div>
+      `;
     }
 
     refresh();
     fetchMetrics();
-    fetchDeepSeekBalance();
     setInterval(refresh, 10000);
     setInterval(fetchMetrics, 60000);
-    setInterval(fetchDeepSeekBalance, 300000);
   </script>
 </body>
 </html>

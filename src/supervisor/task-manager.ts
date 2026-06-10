@@ -11,13 +11,14 @@
  */
 
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, readdirSync, renameSync, createWriteStream } from "fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, createWriteStream, readFileSync } from "fs";
 import { join } from "path";
 import { openDb } from "../db/index.js";
 import { readJson, readJsonWithSchema, writeJson, resolveTaskTimeout, WorkerResultSchema } from "../config.js";
 import type { DelegationTask, WorkerResult, DispatchLogEntry } from "../config.js";
 import log from "../logger.js";
 import { z } from "zod";
+import { getPluginDir } from "./integration-skills.js";
 
 // ── Module state (set via init) ──────────────────────────────────────────────
 
@@ -294,6 +295,21 @@ export function spawnBackgroundTask(task: DelegationTask): void {
   });
 }
 
+function computeTaskCostUSD(taskId: string): number {
+  const logFile = join(ROOT, "state", "logs", "workers", `${taskId}.json`);
+  let raw: string;
+  try { raw = readFileSync(logFile, "utf8"); } catch { return 0; }
+  let total = 0;
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    try {
+      const d = JSON.parse(line) as { modelUsage?: Record<string, { costUSD?: number }> };
+      if (d.modelUsage) total += Object.values(d.modelUsage).reduce((s, m) => s + (m.costUSD ?? 0), 0);
+    } catch { /* skip */ }
+  }
+  return total;
+}
+
 // ── Finalize a completed/failed/timed-out task ──────────────────────────────
 
 interface RunningTaskRow {
@@ -373,6 +389,7 @@ function finalizeTask(
 
   // 4. Dispatch log (final result)
   const dedupKey = (() => { try { return JSON.parse(taskRow.context)._dedup_key; } catch { return undefined; } })();
+  const costUSD = computeTaskCostUSD(taskRow.task_id);
   logDispatch({
     task_id: taskRow.task_id,
     type: taskRow.type,
@@ -382,6 +399,8 @@ function finalizeTask(
     completed_at: result.completed_at,
     status: result.status === "ok" ? "ok" : "error",
     summary: result.summary,
+    cost_usd: costUSD > 0 ? costUSD : null,
+    quest_id: taskRow.quest_id ?? null,
   });
 
   // 5. Remove from running_tasks

@@ -13,15 +13,19 @@ export function makeTaskMethods(db: InstanceType<typeof Database>) {
       completed_at: string;
       status: string;
       summary: string | null;
+      cost_usd?: number | null;
+      quest_id?: string | null;
     }): void {
       db.prepare(`
-        INSERT INTO dispatch_log (task_id, type, priority, dedup_key, dispatched_at, completed_at, status, summary)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO dispatch_log (task_id, type, priority, dedup_key, dispatched_at, completed_at, status, summary, cost_usd, quest_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
           completed_at = excluded.completed_at,
           status = excluded.status,
-          summary = excluded.summary
-      `).run(entry.task_id, entry.type, entry.priority, entry.dedup_key ?? "", entry.dispatched_at, entry.completed_at, entry.status, entry.summary);
+          summary = excluded.summary,
+          cost_usd = excluded.cost_usd,
+          quest_id = excluded.quest_id
+      `).run(entry.task_id, entry.type, entry.priority, entry.dedup_key ?? "", entry.dispatched_at, entry.completed_at, entry.status, entry.summary, entry.cost_usd ?? null, entry.quest_id ?? null);
     },
 
     lastTaskId(): string | null {
@@ -229,6 +233,35 @@ export function makeTaskMethods(db: InstanceType<typeof Database>) {
       const deployRow = db.prepare(`SELECT COUNT(*) as cnt FROM deploys ${deployWhere}`).get(...params) as { cnt: number };
 
       return { tasks, byType, byStatus, quests: questRow.cnt, questsWithPr: questPrRow.cnt, deploys: deployRow.cnt };
+    },
+
+    getCostByCategory(since: string | null): Array<{ category: string; cost_usd: number; tasks: number }> {
+      const where = since ? `WHERE cost_usd IS NOT NULL AND completed_at >= ?` : `WHERE cost_usd IS NOT NULL`;
+      const params = since ? [since] : [];
+      return db.prepare(`
+        SELECT COALESCE(category, 'uncategorized') AS category,
+               SUM(cost_usd) AS cost_usd,
+               COUNT(*)      AS tasks
+        FROM dispatch_log ${where}
+        GROUP BY COALESCE(category, 'uncategorized')
+        ORDER BY cost_usd DESC
+      `).all(...params) as Array<{ category: string; cost_usd: number; tasks: number }>;
+    },
+
+    getTaskIdsSince(since: string | null): string[] {
+      const rows = since
+        ? (db.prepare(`SELECT task_id FROM dispatch_log WHERE completed_at >= ?`).all(since) as Array<{ task_id: string }>)
+        : (db.prepare(`SELECT task_id FROM dispatch_log`).all() as Array<{ task_id: string }>);
+      return rows.map(r => r.task_id);
+    },
+
+    getCostEntriesSince(since: string | null): Array<{ task_id: string; completed_at: string; category: string | null; cost_usd: number; quest_id: string | null }> {
+      const where = since ? `WHERE cost_usd IS NOT NULL AND completed_at >= ?` : `WHERE cost_usd IS NOT NULL`;
+      const params = since ? [since] : [];
+      return db.prepare(`
+        SELECT task_id, completed_at, category, cost_usd, quest_id
+        FROM dispatch_log ${where}
+      `).all(...params) as Array<{ task_id: string; completed_at: string; category: string | null; cost_usd: number; quest_id: string | null }>;
     },
   };
 }

@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Franklin · Costs</title>
+  <link rel="icon" type="image/png" href="/avatar.png">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --blue: #58a6ff;
+      --purple: #bc8cff;
+      --orange: #f0883e;
+      --cyan: #39d2c0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; }
+    header h1 img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); }
+    .header-right { display: flex; align-items: center; gap: 12px; }
+    .range-picker { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+    .range-btn {
+      padding: 4px 10px;
+      font-size: 11px;
+      font-family: inherit;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      border-right: 1px solid var(--border);
+    }
+    .range-btn:last-child { border-right: none; }
+    .range-btn:hover { color: var(--text); background: rgba(255,255,255,.03); }
+    .range-btn.active { color: var(--cyan); background: rgba(57,210,192,.1); }
+    #refresh { font-size: 11px; color: var(--muted); }
+
+    .container { padding: 20px; max-width: 1400px; margin: 0 auto; }
+    .section-title {
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    .summary-label {
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .summary-val { font-size: 22px; font-weight: 700; color: var(--text); }
+    .summary-val.cost { color: var(--yellow); }
+    .summary-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .chart-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px;
+    }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 4px 12px;
+      font-size: 11px;
+    }
+    .legend-item { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+    .legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+    .legend-item .legend-name { color: var(--text); }
+
+    .chart-wrap { position: relative; }
+    svg.chart { display: block; width: 100%; height: 280px; }
+    .axis-label { fill: var(--muted); font-size: 10px; font-family: inherit; }
+    .grid-line { stroke: var(--border); stroke-width: 1; }
+    .bar-stack rect { transition: opacity 0.1s ease; }
+    .bar-col:hover .bar-stack rect { opacity: 0.75; }
+    .bar-col.hover .bar-stack rect { opacity: 0.75; }
+    .hover-line {
+      stroke: var(--cyan); stroke-width: 1; opacity: 0;
+      pointer-events: none;
+    }
+
+    .tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 11px;
+      box-shadow: 0 4px 12px rgba(0,0,0,.4);
+      min-width: 180px;
+      opacity: 0;
+      transition: opacity 0.1s ease;
+      z-index: 5;
+    }
+    .tooltip.show { opacity: 1; }
+    .tooltip-title { color: var(--cyan); font-weight: 600; margin-bottom: 4px; }
+    .tooltip-row {
+      display: flex; justify-content: space-between; gap: 12px;
+      padding: 2px 0;
+    }
+    .tooltip-row .tt-label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+    .tooltip-row .tt-val { color: var(--text); font-weight: 600; }
+    .tooltip-total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+    .tooltip-total .tt-val { color: var(--yellow); }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 16px;
+    }
+
+    table.data {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    table.data th {
+      text-align: left;
+      padding: 6px 8px;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    table.data th.num { text-align: right; }
+    table.data td {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    table.data tr:last-child td { border-bottom: none; }
+    table.data tr:hover td { background: rgba(255,255,255,.02); }
+    .model-dot {
+      display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+      margin-right: 7px; vertical-align: middle;
+    }
+    .cost-cell { color: var(--yellow); font-weight: 600; }
+    .share-bar {
+      display: inline-block; width: 60px; height: 6px;
+      background: rgba(255,255,255,.06); border-radius: 2px; vertical-align: middle;
+      margin-right: 6px; overflow: hidden;
+    }
+    .share-bar > span { display: block; height: 100%; background: var(--cyan); border-radius: 2px; }
+    .src-tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+    .group-toggle {
+      display: flex; gap: 0; border: 1px solid var(--border); border-radius: 4px;
+      overflow: hidden; font-size: 10px;
+    }
+    .group-toggle button {
+      padding: 3px 8px;
+      font-family: inherit;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      border-right: 1px solid var(--border);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .group-toggle button:last-child { border-right: none; }
+    .group-toggle button.active { color: var(--cyan); background: rgba(57,210,192,.1); }
+    .group-toggle button:hover { color: var(--text); }
+
+    /* Each row is its own progress bar — the cyan fill spans `--share` of
+       the row width, representing the category's share of total cost. Name
+       and value sit on top so long category names can't collide with the
+       bar. */
+    .cat-row {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      margin-bottom: 4px;
+      border-radius: 4px;
+      background: linear-gradient(
+        to right,
+        rgba(57,210,192,.18) 0,
+        rgba(57,210,192,.18) var(--share),
+        rgba(255,255,255,.03) var(--share),
+        rgba(255,255,255,.03) 100%
+      );
+      font-size: 12px;
+      overflow: hidden;
+    }
+    .cat-row:last-child { margin-bottom: 0; }
+    .cat-name {
+      color: var(--text);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      flex: 1;
+    }
+    .cat-tasks { color: var(--muted); font-size: 10px; margin-left: 8px; }
+    .cat-val {
+      color: var(--yellow);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .cat-share { color: var(--muted); font-weight: 500; margin-left: 6px; }
+
+    .empty { color: var(--muted); font-style: italic; font-size: 12px; padding: 10px 0; }
+
+    @media (max-width: 900px) {
+      .summary-grid { grid-template-columns: repeat(2, 1fr); }
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><img src="/avatar.png" alt="Franklin"><a href="/" style="color:var(--text)">Franklin</a> <span style="color:var(--muted);font-weight:400">/ costs</span></h1>
+    <div class="header-right">
+      <div class="range-picker" id="range-picker">
+        <button class="range-btn" data-days="7">7d</button>
+        <button class="range-btn active" data-days="30">30d</button>
+        <button class="range-btn" data-days="90">90d</button>
+        <button class="range-btn" data-days="180">180d</button>
+      </div>
+      <div id="refresh">loading...</div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="summary-grid" id="summary"></div>
+
+    <div class="chart-card">
+      <div class="chart-head">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div class="section-title" style="margin:0">Daily cost</div>
+          <div class="group-toggle" id="group-toggle">
+            <button data-group="model" class="active">By model</button>
+            <button data-group="source">Brain vs worker</button>
+          </div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div class="chart-wrap" id="chart-wrap">
+        <svg class="chart" id="chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg>
+        <div class="tooltip" id="tooltip"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="chart-card">
+        <div class="section-title">Models</div>
+        <div id="models-table"></div>
+      </div>
+      <div class="chart-card">
+        <div class="section-title">By category</div>
+        <div id="cat-list"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    function esc(s) {
+      return String(s ?? '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function fmtCost(n) { return '$' + (n ?? 0).toFixed(2); }
+    function fmtTokens(n) {
+      if (!n) return '0';
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000) return (n / 1_000).toFixed(0) + 'K';
+      return String(n);
+    }
+
+    // Stable model → color mapping. Sort-by-cost gives biggest spender the
+    // first slot; assignment is deterministic per request so the legend and
+    // chart stay in sync.
+    const PALETTE = [
+      '#58a6ff', // blue
+      '#bc8cff', // purple
+      '#39d2c0', // cyan
+      '#f0883e', // orange
+      '#d29922', // yellow
+      '#3fb950', // green
+      '#f85149', // red
+      '#7ee787', // light green
+      '#79c0ff', // light blue
+      '#ff7b72', // salmon
+      '#a371f7', // violet
+      '#56d364', // grass
+    ];
+    function shortModel(name) {
+      return name.replace(/^claude-/, '').replace(/\[1m\]$/, ' (1M)');
+    }
+
+    let state = { days: 30, groupBy: 'model', data: null };
+
+    // Source styling — used in summary cards, table tags, and the
+    // "group by source" chart view.
+    const SOURCE = {
+      worker: { label: 'Worker',  emoji: '🦝', color: '#39d2c0' /* cyan  */ },
+      brain:  { label: 'Brain',   emoji: '🧠', color: '#bc8cff' /* purple */ },
+    };
+
+    function render(data) {
+      state.data = data;
+
+      // ── Summary ────────────────────────────────────────────────────────────
+      const topModel = data.models[0];
+      const ws = data.bySource?.worker ?? { costUSD: 0, tasks: 0, share: 0 };
+      const bs = data.bySource?.brain  ?? { costUSD: 0, invocations: 0, share: 0 };
+      const cards = [
+        { label: `Total · ${data.days}d`, val: fmtCost(data.total), sub: `${fmtCost(data.avgPerDay)} / day · since ${data.since.slice(0, 10)}`, cls: 'cost' },
+        { label: `${SOURCE.worker.emoji} Workers`,
+          val: fmtCost(ws.costUSD),
+          sub: `${ws.tasks} task${ws.tasks === 1 ? '' : 's'} · ${(ws.share*100).toFixed(0)}%`, cls: 'cost' },
+        { label: `${SOURCE.brain.emoji} Brain`,
+          val: fmtCost(bs.costUSD),
+          sub: `${bs.invocations} call${bs.invocations === 1 ? '' : 's'} · ${(bs.share*100).toFixed(0)}%`, cls: 'cost' },
+        { label: 'Top model',             val: topModel ? shortModel(topModel.name) : '—',
+                                          sub: topModel ? `${SOURCE[topModel.source].emoji} ${fmtCost(topModel.costUSD)} · ${(topModel.share*100).toFixed(0)}%` : '', cls: '' },
+      ];
+      document.getElementById('summary').innerHTML = cards.map(c => `
+        <div class="summary-card">
+          <div class="summary-label">${esc(c.label)}</div>
+          <div class="summary-val ${c.cls}">${esc(c.val)}</div>
+          ${c.sub ? `<div class="summary-sub">${esc(c.sub)}</div>` : ''}
+        </div>
+      `).join('');
+
+      // Color map for "Group by model" view — keyed by `${source}::${name}`
+      // so the same model used by both worker and brain stacks separately
+      // and gets distinct legend entries. Top spender → palette[0].
+      const colorOf = {};
+      data.models.forEach((m, i) => { colorOf[`${m.source}::${m.name}`] = PALETTE[i % PALETTE.length]; });
+
+      // Build chart "series" list based on the active group-by mode.
+      // Each series is { key, color, label, dailyValues[] }.
+      const days = data.daily;
+      const groupBy = state.groupBy;
+      let series;
+      if (groupBy === 'source') {
+        series = ['worker', 'brain'].map(src => ({
+          key: src,
+          color: SOURCE[src].color,
+          label: `${SOURCE[src].emoji} ${SOURCE[src].label}`,
+          total: days.reduce((s, d) => s + (d.bySource?.[src] ?? 0), 0),
+          dailyValues: days.map(d => d.bySource?.[src] ?? 0),
+        })).filter(s => s.total > 0).sort((a, b) => b.total - a.total);
+      } else {
+        // Group by model — one series per (source, model). Iterate the
+        // sorted `models` array so the biggest spender stacks at the
+        // bottom and the legend stays consistent.
+        series = data.models.map(m => {
+          const key = `${m.source}::${m.name}`;
+          return {
+            key,
+            color: colorOf[key],
+            label: `${SOURCE[m.source].emoji} ${shortModel(m.name)}`,
+            total: m.costUSD,
+            dailyValues: days.map(d => d.byModelSource?.[m.source]?.[m.name] ?? 0),
+          };
+        });
+      }
+
+      // ── Legend ─────────────────────────────────────────────────────────────
+      document.getElementById('legend').innerHTML = series.slice(0, 10).map(s => `
+        <span class="legend-item">
+          <span class="legend-swatch" style="background:${s.color}"></span>
+          <span class="legend-name">${esc(s.label)}</span>
+          <span>${fmtCost(s.total)}</span>
+        </span>
+      `).join('') || '<span style="color:var(--muted)">No usage in window</span>';
+
+      // ── Stacked bar chart ──────────────────────────────────────────────────
+      const W = 1000, H = 280;
+      const PAD = { l: 50, r: 14, t: 10, b: 22 };
+      const plotW = W - PAD.l - PAD.r;
+      const plotH = H - PAD.t - PAD.b;
+      const maxVal = Math.max(0.01, ...days.map(d => d.total));
+      const yTicks = niceTicks(maxVal, 4);
+      const yMax = yTicks[yTicks.length - 1];
+      const barGap = 2;
+      const barW = Math.max(1, (plotW / days.length) - barGap);
+
+      let svg = '';
+      // grid + y-axis labels
+      for (const t of yTicks) {
+        const y = PAD.t + plotH - (t / yMax) * plotH;
+        svg += `<line class="grid-line" x1="${PAD.l}" x2="${W - PAD.r}" y1="${y}" y2="${y}" />`;
+        svg += `<text class="axis-label" x="${PAD.l - 6}" y="${y + 3}" text-anchor="end">$${t.toFixed(2)}</text>`;
+      }
+
+      // x-axis labels: show ~6-8 ticks
+      const xLabelEvery = Math.max(1, Math.round(days.length / 8));
+      days.forEach((d, i) => {
+        if (i % xLabelEvery !== 0 && i !== days.length - 1) return;
+        const x = PAD.l + i * (barW + barGap) + barW / 2;
+        const label = d.date.slice(5); // MM-DD
+        svg += `<text class="axis-label" x="${x}" y="${H - 6}" text-anchor="middle">${label}</text>`;
+      });
+
+      // bars
+      days.forEach((d, i) => {
+        const x = PAD.l + i * (barW + barGap);
+        let yCursor = PAD.t + plotH;
+        let stack = '';
+        for (const s of series) {
+          const v = s.dailyValues[i] ?? 0;
+          if (v <= 0) continue;
+          const h = (v / yMax) * plotH;
+          yCursor -= h;
+          stack += `<rect x="${x}" y="${yCursor}" width="${barW}" height="${h}" fill="${s.color}" />`;
+        }
+        svg += `<g class="bar-col" data-idx="${i}">
+          ${stack ? `<g class="bar-stack">${stack}</g>` : ''}
+          <rect x="${x}" y="${PAD.t}" width="${barW}" height="${plotH}" fill="transparent" />
+        </g>`;
+      });
+
+      document.getElementById('chart').innerHTML = svg;
+
+      // Tooltip hover — list series contributions for the hovered day.
+      const chart = document.getElementById('chart');
+      const tooltip = document.getElementById('tooltip');
+      const wrap = document.getElementById('chart-wrap');
+      chart.querySelectorAll('.bar-col').forEach(g => {
+        g.addEventListener('mousemove', (e) => {
+          const idx = +g.dataset.idx;
+          const d = days[idx];
+          let body = `<div class="tooltip-title">${d.date}</div>`;
+          const rows = series
+            .map(s => ({ s, v: s.dailyValues[idx] ?? 0 }))
+            .filter(r => r.v > 0)
+            .sort((a, b) => b.v - a.v);
+          if (!rows.length) {
+            body += `<div class="tooltip-row"><span class="tt-label">No usage</span><span class="tt-val">$0.00</span></div>`;
+          } else {
+            for (const { s, v } of rows) {
+              body += `<div class="tooltip-row">
+                <span class="tt-label"><span class="legend-swatch" style="background:${s.color}"></span>${esc(s.label)}</span>
+                <span class="tt-val">${fmtCost(v)}</span>
+              </div>`;
+            }
+          }
+          body += `<div class="tooltip-row tooltip-total">
+            <span class="tt-label">Total</span><span class="tt-val">${fmtCost(d.total)}</span>
+          </div>`;
+          tooltip.innerHTML = body;
+          tooltip.classList.add('show');
+          const wrapRect = wrap.getBoundingClientRect();
+          const localX = e.clientX - wrapRect.left;
+          const localY = e.clientY - wrapRect.top;
+          const ttW = tooltip.offsetWidth;
+          let left = localX + 14;
+          if (left + ttW > wrapRect.width) left = localX - ttW - 14;
+          tooltip.style.left = `${Math.max(0, left)}px`;
+          tooltip.style.top = `${Math.max(0, localY - 8)}px`;
+        });
+        g.addEventListener('mouseleave', () => tooltip.classList.remove('show'));
+      });
+
+      // ── Models table ───────────────────────────────────────────────────────
+      const modelsEl = document.getElementById('models-table');
+      if (!data.models.length) {
+        modelsEl.innerHTML = '<div class="empty">No model usage in this window</div>';
+      } else {
+        modelsEl.innerHTML = `
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Model</th>
+                <th class="num">Tasks</th>
+                <th class="num">Input</th>
+                <th class="num">Output</th>
+                <th class="num">Cache rd</th>
+                <th class="num">Share</th>
+                <th class="num">Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.models.map(m => {
+                const key = `${m.source}::${m.name}`;
+                const src = SOURCE[m.source];
+                return `
+                <tr>
+                  <td>
+                    <span class="src-tag" style="background:${src.color}22;color:${src.color}">${src.emoji} ${src.label}</span>
+                  </td>
+                  <td>
+                    <span class="model-dot" style="background:${colorOf[key]}"></span>
+                    ${esc(shortModel(m.name))}
+                  </td>
+                  <td class="num">${m.tasks}</td>
+                  <td class="num">${fmtTokens(m.inputTokens)}</td>
+                  <td class="num">${fmtTokens(m.outputTokens)}</td>
+                  <td class="num" style="color:var(--muted)">${fmtTokens(m.cacheReadInputTokens)}</td>
+                  <td class="num">
+                    <span class="share-bar"><span style="width:${(m.share*100).toFixed(1)}%;background:${colorOf[key]}"></span></span>
+                    ${(m.share*100).toFixed(1)}%
+                  </td>
+                  <td class="num cost-cell">${fmtCost(m.costUSD)}</td>
+                </tr>
+              `;}).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      // ── Categories ─────────────────────────────────────────────────────────
+      // Bars represent each category's share of total cost (not max), so
+      // sizes are directly comparable across rows.
+      const catEl = document.getElementById('cat-list');
+      const catTotal = data.byCategory.reduce((s, c) => s + c.cost_usd, 0) || 1;
+      catEl.innerHTML = data.byCategory.length ? data.byCategory.map(c => {
+        const sharePct = (c.cost_usd / catTotal) * 100;
+        return `
+        <div class="cat-row" style="--share:${sharePct.toFixed(1)}%">
+          <span class="cat-name" title="${esc(c.category)}">${esc(c.category)}</span>
+          <span class="cat-tasks">${c.tasks} task${c.tasks === 1 ? '' : 's'}</span>
+          <span class="cat-val">${fmtCost(c.cost_usd)}<span class="cat-share">${sharePct.toFixed(0)}%</span></span>
+        </div>
+        `;
+      }).join('') : '<div class="empty">No category data</div>';
+
+      document.getElementById('refresh').textContent = `updated ${new Date().toLocaleTimeString()}`;
+    }
+
+    function niceTicks(max, count) {
+      // Returns ~count "nice" tick values from 0 to ≥max.
+      if (max <= 0) return [0, 1];
+      const rough = max / count;
+      const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+      const candidates = [1, 2, 2.5, 5, 10];
+      let step = pow;
+      for (const c of candidates) {
+        if (c * pow >= rough) { step = c * pow; break; }
+      }
+      const ticks = [];
+      for (let v = 0; v <= max + step / 2; v += step) ticks.push(+v.toFixed(6));
+      return ticks;
+    }
+
+    async function load(days) {
+      state.days = days;
+      document.querySelectorAll('.range-btn').forEach(b => {
+        b.classList.toggle('active', +b.dataset.days === days);
+      });
+      document.getElementById('refresh').textContent = 'loading...';
+      try {
+        const r = await fetch(`/api/costs?days=${days}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        render(data);
+      } catch (e) {
+        document.getElementById('refresh').textContent = 'error: ' + e.message;
+      }
+    }
+
+    document.getElementById('range-picker').addEventListener('click', (e) => {
+      const btn = e.target.closest('.range-btn');
+      if (!btn) return;
+      load(+btn.dataset.days);
+    });
+
+    document.getElementById('group-toggle').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-group]');
+      if (!btn) return;
+      state.groupBy = btn.dataset.group;
+      document.querySelectorAll('#group-toggle button').forEach(b => {
+        b.classList.toggle('active', b.dataset.group === state.groupBy);
+      });
+      if (state.data) render(state.data);
+    });
+
+    load(30);
+    setInterval(() => load(state.days), 60_000);
+  </script>
+</body>
+</html>

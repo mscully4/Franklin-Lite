@@ -54,6 +54,9 @@ references
 # Secrets
 secrets/
 
+# Playbooks (user-specific, may contain secrets, backed up separately)
+playbooks/
+
 # CDK
 cdk/cdk.out/
 

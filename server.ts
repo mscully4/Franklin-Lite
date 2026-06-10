@@ -1,5 +1,5 @@
 import express from "express";
-import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
@@ -58,6 +58,13 @@ app.get("/api/state", (_req, res) => {
     return { name, last, lastAgo: timeAgo(last), intervalMin, overdue: isStale(last, intervalMin * 60 * 1.5) };
   });
 
+  // Pre-compute quest cost map from dispatch_log
+  const questCostMap = new Map<string, number>();
+  for (const entry of db.getCostEntriesSince(null)) {
+    if (!entry.quest_id) continue;
+    questCostMap.set(entry.quest_id, (questCostMap.get(entry.quest_id) ?? 0) + (entry.cost_usd ?? 0));
+  }
+
   const activeDir = join(STATE, "quests", "active");
   const activeQuests = readQuestDir(activeDir).map((file) => {
     const quest = readJson<Record<string, unknown>>(join(activeDir, file));
@@ -69,6 +76,7 @@ app.get("/api/state", (_req, res) => {
       action: e.action,
       summary: ((e.summary as string) ?? "").slice(0, 200),
     }));
+    const costUSD = questCostMap.get(quest.id as string) ?? 0;
     return {
       id: quest.id,
       objective: quest.objective,
@@ -77,6 +85,8 @@ app.get("/api/state", (_req, res) => {
       agentStatus: quest.agent_status,
       prUrl: quest.pr_url ?? null,
       category: quest.category ?? null,
+      costUSD: costUSD > 0 ? costUSD : null,
+      workerModel: (quest.worker_model as string) ?? null,
       recentLogs,
       logCount: logs.length,
       raw: quest,
@@ -91,6 +101,7 @@ app.get("/api/state", (_req, res) => {
       if (!quest) return null;
       const updatedAt = (quest.updated_at as string) ?? "";
       if (updatedAt < recentCutoff) return null;
+      const costUSD = questCostMap.get(quest.id as string) ?? 0;
       return {
         id: quest.id,
         objective: (quest.objective as string) ?? "",
@@ -99,6 +110,8 @@ app.get("/api/state", (_req, res) => {
         prUrl: (quest.pr_url as string) ?? null,
         status: quest.status,
         category: quest.category ?? null,
+        costUSD: costUSD > 0 ? costUSD : null,
+        workerModel: (quest.worker_model as string) ?? null,
         raw: quest,
       };
     })
@@ -181,6 +194,74 @@ app.get("/api/state", (_req, res) => {
 
 // ── Metrics API ──────────────────────────────────────────────────────────────
 
+function addUsageToTotals(totals: Record<string, ModelUsageEntry>, raw: string): boolean {
+  let any = false;
+  for (const line of raw.split("\n")) {
+    try {
+      const d = JSON.parse(line) as { modelUsage?: Record<string, Omit<ModelUsageEntry, "tasks">> };
+      if (!d.modelUsage) continue;
+      any = true;
+      for (const [model, usage] of Object.entries(d.modelUsage)) {
+        const t = totals[model] ?? (totals[model] = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0, tasks: 0 });
+        t.inputTokens += usage.inputTokens ?? 0;
+        t.outputTokens += usage.outputTokens ?? 0;
+        t.cacheReadInputTokens += usage.cacheReadInputTokens ?? 0;
+        t.cacheCreationInputTokens += usage.cacheCreationInputTokens ?? 0;
+        t.costUSD += usage.costUSD ?? 0;
+        t.tasks += 1;
+      }
+    } catch { /* skip unparseable lines */ }
+  }
+  return any;
+}
+
+function aggregateTokenUsage(since: string | null): Record<string, ModelUsageEntry> {
+  const LOGS_DIR = join(STATE, "logs", "workers");
+  const taskIds = new Set(db.getTaskIdsSince(since));
+  const totals: Record<string, ModelUsageEntry> = {};
+  let files: string[];
+  try { files = readdirSync(LOGS_DIR).filter(f => f.endsWith(".json")); } catch { return totals; }
+  for (const file of files) {
+    const taskId = file.replace(".json", "");
+    if (since && !taskIds.has(taskId)) continue;
+    const raw = (() => { try { return readFileSync(join(LOGS_DIR, file), "utf8"); } catch { return null; } })();
+    if (!raw) continue;
+    addUsageToTotals(totals, raw);
+  }
+  const BRAIN_DIR = join(STATE, "logs", "brain");
+  const sinceMs = since ? new Date(since).getTime() : 0;
+  let brainFiles: string[];
+  try { brainFiles = readdirSync(BRAIN_DIR).filter(f => /^brain-\d+\.json$/.test(f)); } catch { brainFiles = []; }
+  for (const file of brainFiles) {
+    const m = file.match(/^brain-(\d+)\.json$/);
+    if (!m) continue;
+    if (since && Number(m[1]) < sinceMs) continue;
+    const raw = (() => { try { return readFileSync(join(BRAIN_DIR, file), "utf8"); } catch { return null; } })();
+    if (!raw) continue;
+    addUsageToTotals(totals, raw);
+  }
+  return totals;
+}
+
+function aggregateBrainUsage(since: string | null): { invocations: number; costUSD: number } {
+  const BRAIN_DIR = join(STATE, "logs", "brain");
+  const sinceMs = since ? new Date(since).getTime() : 0;
+  const tokenUsage: Record<string, ModelUsageEntry> = {};
+  let invocations = 0;
+  let files: string[];
+  try { files = readdirSync(BRAIN_DIR).filter(f => /^brain-\d+\.json$/.test(f)); } catch { return { invocations: 0, costUSD: 0 }; }
+  for (const file of files) {
+    const m = file.match(/^brain-(\d+)\.json$/);
+    if (!m) continue;
+    if (since && Number(m[1]) < sinceMs) continue;
+    const raw = (() => { try { return readFileSync(join(BRAIN_DIR, file), "utf8"); } catch { return null; } })();
+    if (!raw) continue;
+    if (addUsageToTotals(tokenUsage, raw)) invocations += 1;
+  }
+  const costUSD = Object.values(tokenUsage).reduce((s, m) => s + m.costUSD, 0);
+  return { invocations, costUSD };
+}
+
 function countQuestActions(since: string | null): Record<string, number> {
   const counts: Record<string, number> = {};
   const dirs = [join(STATE, "quests", "completed"), join(STATE, "quests", "active")];
@@ -220,33 +301,212 @@ app.get("/api/metrics", (_req, res) => {
   for (const [name, { since }] of Object.entries(periods)) {
     const metrics = db.getMetrics(since);
     const actions = countQuestActions(since);
+    const tokenUsage = aggregateTokenUsage(since);
+    const brain = aggregateBrainUsage(since);
+    const totalCostUSD = Object.values(tokenUsage).reduce((s, m) => s + m.costUSD, 0);
     result[name] = {
       ...metrics,
       messagesSent: actions["message_sent"] ?? 0,
       prsCreated: actions["pr_created"] ?? 0,
       commitsPushed: actions["commit_pushed"] ?? 0,
       actions,
+      tokenUsage,
+      brain,
+      totalCostUSD,
     };
   }
 
   res.json({ periods: result, serverTime: now.toISOString() });
 });
 
+// ── Costs API ─────────────────────────────────────────────────────────────────
+
+type CostSource = "worker" | "brain";
+
+type DailyBucket = {
+  date: string;
+  total: number;
+  byModel: Record<string, number>;
+  byModelSource: Record<CostSource, Record<string, number>>;
+  bySource: Record<CostSource, number>;
+};
+
+type ModelUsageEntry = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  costUSD: number;
+  tasks: number;
+};
+
+function emptySource(): Record<CostSource, Record<string, number>> {
+  return { worker: {}, brain: {} };
+}
+
+function dateInTz(iso: string | number, tz: string): string {
+  const d = typeof iso === "number" ? new Date(iso) : new Date(iso);
+  return d.toLocaleDateString("en-CA", { timeZone: tz });
+}
+
+app.get("/api/costs", (req, res) => {
+  const days = Math.max(1, Math.min(180, parseInt(String(req.query.days ?? "30"), 10) || 30));
+  const tzSettings = readJson<{ timezone?: string }>(join(STATE, "settings.json"));
+  const tz = tzSettings?.timezone ?? "America/Chicago";
+
+  const now = new Date();
+  const todayStr = dateInTz(now.getTime(), tz);
+  const startDay = new Date(todayStr + "T00:00:00");
+  startDay.setDate(startDay.getDate() - (days - 1));
+  const sinceIso = startDay.toISOString();
+
+  const dayList: string[] = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(startDay);
+    d.setDate(d.getDate() + i);
+    dayList.push(d.toLocaleDateString("en-CA", { timeZone: tz }));
+  }
+  const dailyMap: Record<string, DailyBucket> = {};
+  for (const date of dayList) {
+    dailyMap[date] = { date, total: 0, byModel: {}, byModelSource: emptySource(), bySource: { worker: 0, brain: 0 } };
+  }
+
+  const bySourceModel: Record<CostSource, Record<string, ModelUsageEntry>> = { worker: {}, brain: {} };
+  const sourceTotals: Record<CostSource, { costUSD: number; tasks: number }> = {
+    worker: { costUSD: 0, tasks: 0 },
+    brain: { costUSD: 0, tasks: 0 },
+  };
+
+  function addUsage(source: CostSource, bucket: DailyBucket, model: string, usage: Omit<ModelUsageEntry, "tasks">, incTask: boolean): number {
+    const cost = usage.costUSD ?? 0;
+    bucket.byModel[model] = (bucket.byModel[model] ?? 0) + cost;
+    bucket.byModelSource[source][model] = (bucket.byModelSource[source][model] ?? 0) + cost;
+    bucket.bySource[source] += cost;
+    bucket.total += cost;
+
+    const slot = bySourceModel[source];
+    const t = slot[model] ?? (slot[model] = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0, tasks: 0 });
+    t.inputTokens += usage.inputTokens ?? 0;
+    t.outputTokens += usage.outputTokens ?? 0;
+    t.cacheReadInputTokens += usage.cacheReadInputTokens ?? 0;
+    t.cacheCreationInputTokens += usage.cacheCreationInputTokens ?? 0;
+    t.costUSD += cost;
+    if (incTask) t.tasks += 1;
+    sourceTotals[source].costUSD += cost;
+    return cost;
+  }
+
+  const LOGS_DIR = join(STATE, "logs", "workers");
+  const entries = db.getCostEntriesSince(sinceIso);
+
+  for (const entry of entries) {
+    const date = dateInTz(entry.completed_at, tz);
+    const bucket = dailyMap[date];
+    if (!bucket) continue;
+
+    const raw = (() => { try { return readFileSync(join(LOGS_DIR, `${entry.task_id}.json`), "utf8"); } catch { return null; } })();
+    let attributed = 0;
+    let firstModel = true;
+    if (raw) {
+      for (const line of raw.split("\n")) {
+        try {
+          const d = JSON.parse(line) as { modelUsage?: Record<string, Omit<ModelUsageEntry, "tasks">> };
+          if (!d.modelUsage) continue;
+          for (const [model, usage] of Object.entries(d.modelUsage)) {
+            attributed += addUsage("worker", bucket, model, usage, firstModel);
+          }
+          firstModel = false;
+        } catch { /* skip */ }
+      }
+    }
+    const remainder = entry.cost_usd - attributed;
+    if (remainder > 0.01) {
+      addUsage("worker", bucket, "unknown", { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: remainder }, attributed === 0);
+    }
+    sourceTotals.worker.tasks += 1;
+  }
+
+  const BRAIN_DIR = join(STATE, "logs", "brain");
+  const sinceMs = startDay.getTime();
+  let brainFiles: string[];
+  try { brainFiles = readdirSync(BRAIN_DIR).filter(f => /^brain-\d+\.json$/.test(f)); } catch { brainFiles = []; }
+  let brainInvocations = 0;
+  for (const file of brainFiles) {
+    const m = file.match(/^brain-(\d+)\.json$/);
+    if (!m) continue;
+    const ms = Number(m[1]);
+    if (ms < sinceMs) continue;
+    const raw = (() => { try { return readFileSync(join(BRAIN_DIR, file), "utf8"); } catch { return null; } })();
+    if (!raw) continue;
+    const date = dateInTz(ms, tz);
+    const bucket = dailyMap[date];
+    if (!bucket) continue;
+    let any = false;
+    let firstModel = true;
+    for (const line of raw.split("\n")) {
+      try {
+        const d = JSON.parse(line) as { modelUsage?: Record<string, Omit<ModelUsageEntry, "tasks">> };
+        if (!d.modelUsage) continue;
+        any = true;
+        for (const [model, usage] of Object.entries(d.modelUsage)) {
+          addUsage("brain", bucket, model, usage, firstModel);
+        }
+        firstModel = false;
+      } catch { /* skip */ }
+    }
+    if (any) {
+      brainInvocations += 1;
+      sourceTotals.brain.tasks += 1;
+    }
+  }
+
+  const daily = dayList.map(d => dailyMap[d]);
+  const total = daily.reduce((s, b) => s + b.total, 0);
+
+  const models: Array<{ source: CostSource; name: string; share: number } & ModelUsageEntry> = [];
+  for (const source of ["worker", "brain"] as CostSource[]) {
+    for (const [name, u] of Object.entries(bySourceModel[source])) {
+      models.push({ source, name, ...u, share: total > 0 ? u.costUSD / total : 0 });
+    }
+  }
+  models.sort((a, b) => b.costUSD - a.costUSD);
+
+  const byCategory = db.getCostByCategory(sinceIso);
+
+  res.json({
+    days,
+    timezone: tz,
+    since: sinceIso,
+    serverTime: now.toISOString(),
+    total,
+    avgPerDay: total / days,
+    daily,
+    models,
+    bySource: {
+      worker: { costUSD: sourceTotals.worker.costUSD, tasks: sourceTotals.worker.tasks, share: total > 0 ? sourceTotals.worker.costUSD / total : 0 },
+      brain:  { costUSD: sourceTotals.brain.costUSD,  invocations: brainInvocations,           share: total > 0 ? sourceTotals.brain.costUSD  / total : 0 },
+    },
+    byCategory,
+  });
+});
+
 app.get("/", (_req, res) => res.sendFile(join(__dirname, "index.html")));
+app.get("/costs", (_req, res) => res.sendFile(join(__dirname, "costs.html")));
 app.get("/avatar.png", (_req, res) => res.sendFile(join(__dirname, "Franklin-Avatar.png")));
 
-app.get("/api/deepseek-balance", async (_req, res) => {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) { res.status(503).json({ error: "DEEPSEEK_API_KEY not set" }); return; }
-  try {
-    const r = await fetch("https://api.deepseek.com/user/balance", {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const data = await r.json() as { is_available?: boolean; balance_infos?: Array<{ currency: string; total_balance: string; topped_up_balance: string }> };
-    res.json(data);
-  } catch (err) {
-    res.status(502).json({ error: (err as Error).message });
-  }
+
+app.post("/api/scheduled/:id/reset", (req, res) => {
+  const id = req.params.id;
+  const file = join(STATE, "scheduled_tasks.json");
+  const tasks = readJson<Array<Record<string, unknown>>>(file) ?? [];
+  const job = tasks.find((t) => t.id === id);
+  if (!job) { res.status(404).json({ error: "task not found" }); return; }
+  job.fail_count = 0;
+  job.last_fail = null;
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, JSON.stringify(tasks, null, 2));
+  renameSync(tmp, file);
+  res.json({ ok: true });
 });
 
 app.listen(PORT, "0.0.0.0", () => {

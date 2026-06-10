@@ -35,7 +35,8 @@
     },
     {
       "name": "agent-browser",
-      "description": "Browser automation CLI"
+      "description": "Browser automation CLI",
+      "skillLocation": "https://raw.githubusercontent.com/mscully4/claude-code-plugins/refs/heads/main/skills/agent-browser/SKILL.md"
     },
     {
       "name": "hassio",

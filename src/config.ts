@@ -55,6 +55,8 @@ export interface DispatchLogEntry {
   completed_at: string;
   status: "ok" | "error" | "skipped" | "timeout" | "no_worker" | "needs_info";
   summary: string | null;
+  cost_usd?: number | null;
+  quest_id?: string | null;
 }
 
 // ── JSON helpers ─────────────────────────────────────────────────────────────
